@@ -1,0 +1,261 @@
+<div class="app-layout">
+  <!-- Header Superior -->
+  <header class="navbar">
+    <div class="navbar-brand">
+      <div class="brand-logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">Projeto Romaneio</h1>
+        <p class="brand-subtitle">Otimizador e Planejador de Rotas de Entrega</p>
+      </div>
+    </div>
+
+    <!-- Origem Fixa Badge -->
+    <div class="base-badge" *ngIf="baseFixa">
+      <div class="base-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+      </div>
+      <div class="base-info">
+        <span class="base-label">Origem Fixa Obrigatória</span>
+        <span class="base-address">{{ baseFixa.enderecoCompleto }}</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Container Principal -->
+  <main class="main-content">
+    <!-- Seção de Upload (Estado Inicial ou quando nenhuma planilha foi processada) -->
+    <section class="upload-section" *ngIf="rotas.length === 0">
+      <div
+        class="drop-zone"
+        [class.dragging]="isDragging"
+        [class.loading]="isLoading"
+        (dragover)="onDragOver($event)"
+        (dragleave)="onDragLeave($event)"
+        (drop)="onDrop($event)"
+        (click)="!isLoading && acionarSeletorArquivo()"
+      >
+        <input
+          #fileInput
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          (change)="onFileSelected($event)"
+          style="display: none;"
+        />
+
+        <div class="upload-content" *ngIf="!isLoading">
+          <div class="upload-icon-circle">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <h2 class="upload-title">Importar Planilha Operacional de Encomendas</h2>
+          <p class="upload-desc">
+            Arraste e solte o arquivo aqui ou <span>clique para selecionar</span>
+          </p>
+          <div class="file-badges">
+            <span class="file-badge">.XLSX</span>
+            <span class="file-badge">.CSV</span>
+          </div>
+        </div>
+
+        <!-- Spinner de Carregamento -->
+        <div class="loading-state" *ngIf="isLoading">
+          <div class="spinner"></div>
+          <h3 class="loading-title">Processando e Calculando as 5 Melhores Rotas...</h3>
+          <p class="loading-desc">Executando validação, geocodificação e algoritmo de otimização de rotas</p>
+        </div>
+      </div>
+
+      <!-- Alerta de Erro -->
+      <div class="alert alert-danger" *ngIf="erroMensagem">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>{{ erroMensagem }}</span>
+      </div>
+    </section>
+
+    <!-- Seção de Resultados (Rotas Calculadas) -->
+    <div class="results-dashboard" *ngIf="rotas.length > 0">
+
+      <!-- Barra Superior com Metadados e Ações -->
+      <div class="action-bar">
+        <div class="meta-pills">
+          <div class="pill pill-primary">
+            <span class="pill-label">Arquivo:</span>
+            <span class="pill-val">{{ importacaoResponse?.nomeArquivoOriginal || 'Planilha' }}</span>
+          </div>
+          <div class="pill">
+            <span class="pill-label">Linhas Lidas:</span>
+            <span class="pill-val">{{ importacaoResponse?.totalLinhasLidas }}</span>
+          </div>
+          <div class="pill">
+            <span class="pill-label">Encomendas Válidas:</span>
+            <span class="pill-val">{{ importacaoResponse?.totalValidas }}</span>
+          </div>
+          <div class="pill" *ngIf="importacaoResponse?.totalDuplicadas">
+            <span class="pill-label">Duplicadas:</span>
+            <span class="pill-val">{{ importacaoResponse?.totalDuplicadas }}</span>
+          </div>
+          <div class="pill">
+            <span class="pill-label">Pontos de Parada:</span>
+            <span class="pill-val">{{ importacaoResponse?.totalParadasAgrupadas }}</span>
+          </div>
+        </div>
+
+        <div class="action-buttons">
+          <button class="btn btn-secondary" (click)="exportarRotaComoCsv()" title="Exportar rota selecionada em CSV">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Exportar CSV
+          </button>
+          <button class="btn btn-primary" (click)="reiniciarImportacao()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Nova Importação
+          </button>
+        </div>
+      </div>
+
+      <!-- Seletor das 5 Melhores Alternativas de Rotas -->
+      <div class="routes-selection">
+        <h2 class="section-heading">5 Melhores Rotas Recomendadas (Agrupamento por Letra e Número)</h2>
+        <div class="routes-grid">
+          <div
+            *ngFor="let rota of rotas"
+            class="route-card"
+            [class.active]="rotaSelecionada?.posicao === rota.posicao"
+            [class.recommended]="rota.recomendada"
+            (click)="selecionarRota(rota)"
+          >
+            <div class="card-header">
+              <div class="route-badge">
+                <span class="route-num">{{ rota.posicao }} · Rota {{ rota.letra }}{{ rota.posicao }}</span>
+                <span class="badge-rec" *ngIf="rota.recomendada">★ Menor distância</span>
+              </div>
+              <span class="route-strategy">{{ rota.estrategia }}</span>
+            </div>
+
+            <div class="card-metrics">
+              <div class="metric">
+                <span class="metric-label">Distância Total</span>
+                <span class="metric-value distance">{{ rota.distanciaTotalFormatada }}</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Tempo Estimado</span>
+                <span class="metric-value">{{ rota.tempoEstimadoFormatado }}</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Paradas / Volumes</span>
+                <span class="metric-value">{{ rota.totalParadas }} paradas · {{ rota.totalEncomendas }} encomendas</span>
+              </div>
+            </div>
+
+            <div class="card-footer">
+              <span class="no-return-note">Sem retorno à base</span>
+              <span class="select-indicator" *ngIf="rotaSelecionada?.posicao === rota.posicao">Selecionada para visualização ✓</span>
+              <span class="select-indicator select-action" *ngIf="rotaSelecionada?.posicao !== rota.posicao">Selecionar para visualizar</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detalhamento da Rota Selecionada: Mapa + Lista de Paradas -->
+      <div class="route-details-layout" *ngIf="rotaSelecionada">
+
+        <!-- Coluna Esquerda: Lista de Paradas / Sequência de Entregas -->
+        <div class="stops-panel">
+          <div class="panel-header">
+            <div>
+              <h3 class="panel-title">Sequência do Romaneio (Rota {{ rotaSelecionada.letra || 'A' }}{{ rotaSelecionada.posicao }})</h3>
+              <p class="panel-subtitle">Total de {{ rotaSelecionada.totalParadas }} paradas e {{ rotaSelecionada.totalEncomendas }} volumes calculados por CEP e Endereço</p>
+            </div>
+          </div>
+
+          <div class="stops-list">
+            <div
+              *ngFor="let parada of rotaSelecionada.paradas"
+              class="stop-item"
+              [class.base-item]="parada.tipo === 'BASE_ORIGEM'"
+              [class.multiple-packages]="parada.totalVolumes > 1"
+              [class.selected-stop]="paradaSelecionada?.sequencia === parada.sequencia"
+              (click)="selecionarParada(parada)"
+            >
+              <div class="stop-badge" [class.base-badge-icon]="parada.tipo === 'BASE_ORIGEM'">
+                {{ parada.tipo === 'BASE_ORIGEM' ? '🏠' : parada.sequencia }}
+              </div>
+
+              <div class="stop-info">
+                <div class="stop-address">
+                  <strong>{{ parada.tipo === 'BASE_ORIGEM' ? 'Base Fixa (Partida)' : parada.enderecoCompleto }}</strong>
+                  <span class="badge-multi-tag" *ngIf="parada.totalVolumes > 1">
+                    {{ parada.totalVolumes }} entregas no mesmo ponto
+                  </span>
+                </div>
+
+                <div class="stop-meta">
+                  <span *ngIf="parada.bairro" class="meta-tag">{{ parada.bairro }}</span>
+                  <span *ngIf="parada.cep" class="meta-tag meta-cep">CEP: {{ parada.cep }}</span>
+                  <span class="meta-tag meta-dist">+{{ parada.distanciaTrechoFormatada }}</span>
+                  <span class="meta-tag meta-acumulado">Acum: {{ parada.distanciaAcumuladaFormatada }}</span>
+                </div>
+
+                <!-- Detalhe das encomendas nesta parada -->
+                <div class="stop-packages" *ngIf="parada.encomendas.length > 0">
+                  <span class="packages-summary" [class.highlight-multi]="parada.totalVolumes > 1">
+                    📦 {{ parada.totalVolumes }} {{ parada.totalVolumes === 1 ? 'encomenda / volume' : 'encomendas / volumes agrupados neste endereço' }}:
+                  </span>
+                  <div class="package-codes-list">
+                    <div *ngFor="let enc of parada.encomendas; let idxEnc = index" class="pkg-detail-row">
+                      <span class="pkg-pill">{{ enc.codigo }}</span>
+                      <span class="pkg-detail-text" *ngIf="enc.complemento">({{ enc.complemento }})</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coluna Direita: Mapa Interativo com Leaflet -->
+        <div class="map-panel">
+          <div class="panel-header map-header">
+            <div>
+              <h3 class="panel-title">Mapa da Rota (Rota {{ rotaSelecionada.letra || 'A' }}{{ rotaSelecionada.posicao }})</h3>
+              <p class="panel-subtitle">Traçado partindo de Itaipuaçu / Maricá - RJ</p>
+            </div>
+            <div class="map-legend">
+              <span class="legend-item"><span class="dot dot-base"></span> Base</span>
+              <span class="legend-item"><span class="dot dot-first"></span> 1ª Entrega</span>
+              <span class="legend-item"><span class="dot dot-stop"></span> Paradas</span>
+              <span class="legend-item"><span class="dot dot-last"></span> Última Parada</span>
+            </div>
+          </div>
+
+          <div class="map-wrapper">
+            <div #mapContainer class="leaflet-map-container"></div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </main>
+</div>
