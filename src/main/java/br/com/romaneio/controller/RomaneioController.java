@@ -36,21 +36,13 @@ public class RomaneioController {
     }
 
     /**
-     * Lê a planilha e classifica cinco rotas por quantidade de pontos únicos, sem geolocalizar.
+     * Lê a planilha e classifica até dez rotas por pontos únicos nas áreas prioritárias, sem geolocalizar.
      */
     @PostMapping(value = "/processar-completo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ImportacaoResponseDTO> processarPlanilhaCompleta(
             @RequestParam("file") MultipartFile file) {
         ImportacaoResponseDTO resultado = romaneioService.prepararPlanilha(file);
         return ResponseEntity.ok(resultado);
-    }
-
-    /** Geocodifica e calcula a distância/tempo somente para a rota escolhida na interface. */
-    @PostMapping(value = "/{idImportacao}/rotas/{identificador}/calcular")
-    public ResponseEntity<RotaResponseDTO> calcularRotaSelecionada(
-            @PathVariable String idImportacao,
-            @PathVariable String identificador) {
-        return ResponseEntity.ok(romaneioService.calcularRotaSelecionada(idImportacao, identificador));
     }
 
     /**

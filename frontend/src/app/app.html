@@ -13,7 +13,6 @@
       <a href="#visao-geral" [class.current]="activeTab === 'overview'" (click)="setActiveTab('overview')">Visão geral</a>
       <a href="#importacao" [class.current]="activeTab === 'import'" (click)="setActiveTab('import')">Importação</a>
       <a href="#rotas" [class.current]="activeTab === 'routes'" (click)="setActiveTab('routes')">Rotas</a>
-      <a href="#historico" [class.current]="activeTab === 'history'" (click)="setActiveTab('history')">Histórico</a>
     </nav>
   </header>
 
@@ -24,7 +23,7 @@
         <h1>Planejamento de entregas</h1>
         <p class="intro-copy">Importe seu romaneio, confira as rotas e encontre endereços com mais de uma encomenda.</p>
       </div>
-      <span class="today-label">Classificação inicial por pontos de entrega</span>
+      <span class="today-label">Bairros prioritários e menos pontos</span>
     </section>
 
     <section class="import-section" id="importacao">
@@ -45,7 +44,7 @@
         </ng-container>
         <ng-template #loadingTemplate>
           <span class="spinner"></span><strong>Lendo planilha e agrupando pontos de entrega…</strong>
-          <span class="drop-formats">Distância e tempo só serão calculados quando você selecionar uma rota.</span>
+          <span class="drop-formats">Priorizando bairros e consolidando os pontos de entrega…</span>
         </ng-template>
       </div>
       <p class="import-feedback" *ngIf="erroMensagem" role="status">{{ erroMensagem }}</p>
@@ -82,7 +81,7 @@
       </div>
       <div class="summary-item">
         <span class="summary-icon routes-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="1.7"/><circle cx="18" cy="6" r="2.5" stroke="currentColor" stroke-width="1.7"/><path d="M8.5 18h2a3 3 0 0 0 3-3v-3a3 3 0 0 1 3-3H15" stroke="currentColor" stroke-width="1.7"/></svg></span>
-        <strong>5</strong>
+        <strong>10</strong>
         <span>Rotas desejadas</span>
       </div>
     </section>
@@ -90,13 +89,13 @@
     <section class="empty-results" id="rotas" *ngIf="rotas.length === 0">
       <strong>{{ importacaoResponse ? 'Planilha lida, mas nenhuma rota foi classificada' : 'Suas rotas aparecerão aqui' }}</strong>
       <span *ngIf="importacaoResponse && motivoSemRotas; else textoInicial">{{ motivoSemRotas }}</span>
-      <ng-template #textoInicial><span>Importe o romaneio para ver as cinco rotas com menos pontos de entrega.</span></ng-template>
+      <ng-template #textoInicial><span>Importe o romaneio para priorizar rotas com mais pontos em Jardim Atlântico, Barroco e Praia de Itaipuaçu.</span></ng-template>
     </section>
 
     <section class="results-section" *ngIf="rotas.length > 0">
       <div class="section-title-row results-heading">
         <div class="section-number section-number-green">2</div>
-        <div><h2>Resultado do planejamento</h2><p>{{ arquivoSelecionado?.name || 'Romaneio importado' }} · cinco rotas com menos pontos únicos</p></div>
+        <div><h2>Resultado do planejamento</h2><p>{{ arquivoSelecionado?.name || 'Romaneio importado' }} · mais entregas nos bairros prioritários, com desempate por menos pontos</p></div>
         <div class="results-actions"><button class="button button-light" (click)="exportarRotaComoCsv()" [disabled]="!rotaSelecionada">Exportar rota</button><button class="button button-dark" (click)="reiniciarImportacao()">Nova importação</button></div>
       </div>
 
@@ -107,20 +106,19 @@
                (click)="selecionarRota(rota)" (keydown.enter)="selecionarRota(rota)"
                (keydown.space)="$event.preventDefault(); selecionarRota(rota)">
             <span class="route-rank" [class.rank-first]="i === 0">{{ i + 1 }}</span>
-            <span class="route-main"><strong>Rota {{ rota.identificador }}</strong><small>{{ i === 0 ? 'Menos pontos de entrega' : 'Alternativa ' + (i + 1) }}</small><span class="route-counts">{{ rota.totalParadas }} pontos · {{ rota.quantidadeEncomendas ?? rota.totalEncomendas ?? 0 }} encomendas</span></span>
-            <span class="route-distance"><strong>{{ rota.distanciaTotalFormatada || (rotasEmCalculo.has(rota.identificador || '') ? 'Calculando…' : '—') }}</strong><small>{{ rota.tempoEstimadoFormatado || (rotasEmCalculo.has(rota.identificador || '') ? 'Aguarde o cálculo' : 'Calcular trajeto') }}</small></span>
-            <button class="route-action" type="button" [disabled]="rotaSelecionada?.identificador === rota.identificador"
-                    (click)="$event.stopPropagation(); selecionarRota(rota)">
-              {{ rotaSelecionada?.identificador === rota.identificador ? 'Selecionada' : 'Detalhar Rota' }} <span aria-hidden="true">→</span>
+            <span class="route-main"><strong>Rota {{ rota.identificador }}</strong><small>{{ i === 0 ? 'Mais recomendada' : 'Alternativa ' + (i + 1) }}</small><span class="route-counts">{{ rota.totalParadas }} pontos no total · {{ rota.quantidadeEncomendas ?? rota.totalEncomendas ?? 0 }} encomendas</span><small class="route-neighborhoods" *ngIf="rota.bairros?.length"><strong>Bairros:</strong> {{ rota.bairros.join(', ') }}</small></span>
+            <button class="route-action" type="button"
+                    [class.route-action-selected]="rotaSelecionada?.identificador === rota.identificador"
+                    [attr.aria-expanded]="rotaSelecionada?.identificador === rota.identificador"
+                    (click)="$event.stopPropagation(); alternarDetalhesRota(rota)">
+              {{ rotaSelecionada?.identificador === rota.identificador ? 'Selecionada' : 'Detalhar Rota' }} <span aria-hidden="true">{{ rotaSelecionada?.identificador === rota.identificador ? '−' : '→' }}</span>
             </button>
           </div>
 
           <section class="route-details" *ngIf="rotaSelecionada?.identificador === rota.identificador">
             <div class="details-heading">
               <div><p class="eyebrow">ROTA SELECIONADA</p><h3>Endereços da rota {{ rotaSelecionada?.identificador }}</h3><p>{{ paradasDaRotaSelecionada.length }} pontos · objetos contados em cada endereço</p></div>
-              <div class="distance-chip"><span>Distância e tempo pela via</span><strong>{{ rotaSelecionada?.distanciaTotalFormatada || (rotasEmCalculo.has(rotaSelecionada?.identificador || '') ? 'Calculando…' : 'Pendente') }}</strong><small>{{ rotaSelecionada?.tempoEstimadoFormatado || '' }}</small></div>
             </div>
-            <p class="route-calculation-feedback" *ngIf="erroCalculoRota" role="status">{{ erroCalculoRota }}</p>
             <div class="stops-list">
               <article *ngFor="let parada of paradasDaRotaSelecionada; let i = index" class="stop-row" [class.multiple-packages]="parada.totalVolumes > 1">
                 <span class="stop-number">{{ i + 1 }}</span>
@@ -133,7 +131,6 @@
       </div>
     </section>
 
-    <section class="history-note" id="historico"><span class="history-icon">↻</span><div><strong>Histórico de importações</strong><p>Esta versão mantém os resultados apenas durante a sessão atual.</p></div></section>
     <footer class="page-footer">ROMANEIO <span>·</span> Planejamento local de entregas</footer>
   </main>
 </div>

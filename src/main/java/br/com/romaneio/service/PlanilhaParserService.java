@@ -276,7 +276,7 @@ public class PlanilhaParserService {
                 map.putIfAbsent("numero", i);
             } else if (col.contains("complemento") || col.contains("comp")) {
                 map.putIfAbsent("complemento", i);
-            } else if (col.contains("neighborhood") || col.contains("bairro")) {
+            } else if (col.contains("neighbo") || col.contains("bairro")) {
                 map.putIfAbsent("bairro", i);
             } else if (col.contains("city") || col.contains("cidade") || col.contains("municipio")) {
                 map.putIfAbsent("cidade", i);

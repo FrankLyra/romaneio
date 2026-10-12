@@ -16,6 +16,8 @@ public class RotaResponseDTO {
     private String tempoEstimadoFormatado;
     private int quantidadeParadas;
     private int quantidadeEncomendas;
+    private int pontosBairrosPrioritarios;
+    private List<String> bairros = new ArrayList<>();
     private List<ParadaDTO> paradas = new ArrayList<>();
 
     public RotaResponseDTO() {}
@@ -125,6 +127,18 @@ public class RotaResponseDTO {
 
     public void setQuantidadeEncomendas(int quantidadeEncomendas) {
         this.quantidadeEncomendas = quantidadeEncomendas;
+    }
+
+    public int getPontosBairrosPrioritarios() { return pontosBairrosPrioritarios; }
+
+    public void setPontosBairrosPrioritarios(int pontosBairrosPrioritarios) {
+        this.pontosBairrosPrioritarios = pontosBairrosPrioritarios;
+    }
+
+    public List<String> getBairros() { return bairros; }
+
+    public void setBairros(List<String> bairros) {
+        this.bairros = bairros == null ? new ArrayList<>() : bairros;
     }
 
     public List<ParadaDTO> getParadas() {

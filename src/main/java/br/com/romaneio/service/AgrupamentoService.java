@@ -68,6 +68,11 @@ public class AgrupamentoService {
 
     public String extrairLetraRota(String corredor) { return normalizarIdentificador(corredor); }
 
+    /** Conta pontos únicos, consolidando encomendas no mesmo logradouro, número e CEP. */
+    public int contarEnderecosUnicos(List<EncomendaDTO> encomendas) {
+        return agrupar(encomendas, this::mesmoEndereco).size();
+    }
+
     private List<List<EncomendaDTO>> agrupar(List<EncomendaDTO> itens, Comparador comparador) {
         List<List<EncomendaDTO>> grupos = new ArrayList<>();
         if (itens == null) return grupos;

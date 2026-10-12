@@ -148,7 +148,7 @@ public class RoteirizacaoService {
             }
         }
         calculadas.sort(Comparator.comparing(RotaResponseDTO::getDistanciaTotalKm));
-        List<RotaResponseDTO> melhores = calculadas.stream().limit(5).toList();
+        List<RotaResponseDTO> melhores = calculadas.stream().limit(10).toList();
         for (int i = 0; i < melhores.size(); i++) { melhores.get(i).setId(i + 1); melhores.get(i).setPrincipal(i == 0); }
         if (melhores.isEmpty() && avisos.isEmpty()) avisos.add("Nenhuma rota pôde ser calculada com os dados disponíveis.");
         return new ResultadoRoteirizacao(melhores, avisos);

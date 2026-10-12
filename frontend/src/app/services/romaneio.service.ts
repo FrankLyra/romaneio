@@ -19,7 +19,7 @@ export class RomaneioService {
   }
 
   /**
-   * Importa a planilha e retorna diretamente a lista das 5 rotas calculadas
+   * Importa a planilha e retorna diretamente a lista das 10 rotas recomendadas
    */
   importarPlanilha(file: File): Observable<RotaResponse[]> {
     const formData = new FormData();
@@ -36,8 +36,4 @@ export class RomaneioService {
     return this.http.post<ImportacaoResponse>(`${this.baseUrl}/processar-completo`, formData);
   }
 
-  calcularRotaSelecionada(idImportacao: string, identificador: string): Observable<RotaResponse> {
-    const rota = encodeURIComponent(identificador);
-    return this.http.post<RotaResponse>(`${this.baseUrl}/${idImportacao}/rotas/${rota}/calcular`, {});
-  }
 }

@@ -17,13 +17,11 @@ export class App implements OnInit {
   importacaoResponse: ImportacaoResponse | null = null;
   rotas: RotaResponse[] = [];
   rotaSelecionada: RotaResponse | null = null;
-  rotasEmCalculo = new Set<string>();
   isLoading = false;
   isDragging = false;
   erroMensagem: string | null = null;
-  erroCalculoRota: string | null = null;
   arquivoSelecionado: File | null = null;
-  activeTab: 'overview' | 'import' | 'routes' | 'history' = 'overview';
+  activeTab: 'overview' | 'import' | 'routes' = 'overview';
 
   constructor(private romaneioService: RomaneioService, private cdr: ChangeDetectorRef) {}
 
@@ -31,7 +29,7 @@ export class App implements OnInit {
     this.romaneioService.getBaseFixa().subscribe({ next: base => this.baseFixa = base });
   }
 
-  setActiveTab(tab: 'overview' | 'import' | 'routes' | 'history'): void { this.activeTab = tab; }
+  setActiveTab(tab: 'overview' | 'import' | 'routes'): void { this.activeTab = tab; }
 
   get paradasDaRotaSelecionada(): Parada[] {
     return (this.rotaSelecionada?.paradas || []).filter(p => p.tipo !== 'ORIGEM' && p.tipo !== 'BASE_ORIGEM');
@@ -61,11 +59,9 @@ export class App implements OnInit {
     }
     this.arquivoSelecionado = file;
     this.erroMensagem = null;
-    this.erroCalculoRota = null;
     this.isLoading = true;
     this.rotas = [];
     this.rotaSelecionada = null;
-    this.rotasEmCalculo.clear();
     this.importacaoResponse = null;
 
     this.romaneioService.processarPlanilhaCompleta(file).subscribe({
@@ -103,8 +99,6 @@ export class App implements OnInit {
           };
         });
         this.rotaSelecionada = null;
-        this.rotasEmCalculo.clear();
-        this.erroCalculoRota = null;
         this.cdr.detectChanges();
       },
       error: err => {
@@ -119,63 +113,10 @@ export class App implements OnInit {
 
   selecionarRota(rota: RotaResponse): void {
     this.rotaSelecionada = rota;
-    this.erroCalculoRota = null;
-    const identificador = rota.identificador || '';
-    if (rota.distanciaTotalKm != null || !identificador || this.rotasEmCalculo.has(identificador)) return;
-
-    const idImportacao = this.importacaoResponse?.idImportacao;
-    if (!idImportacao) {
-      this.erroCalculoRota = 'A importação atual não está disponível. Importe a planilha novamente.';
-      return;
-    }
-
-    this.rotasEmCalculo.add(identificador);
-    this.romaneioService.calcularRotaSelecionada(idImportacao, identificador).subscribe({
-      next: calculada => {
-        if (this.importacaoResponse?.idImportacao !== idImportacao) return;
-        const rotaAtualizada = this.normalizarRotaCalculada(calculada, rota);
-        this.rotas = this.rotas.map(item => item.identificador === identificador ? rotaAtualizada : item);
-        if (this.rotaSelecionada?.identificador === identificador) this.rotaSelecionada = rotaAtualizada;
-        this.rotasEmCalculo.delete(identificador);
-        this.cdr.detectChanges();
-      },
-      error: err => {
-        if (this.importacaoResponse?.idImportacao !== idImportacao) return;
-        this.rotasEmCalculo.delete(identificador);
-        if (this.rotaSelecionada?.identificador === identificador) {
-          this.erroCalculoRota = err.error?.mensagem || 'Não foi possível calcular a rota. Verifique a chave do Google Maps e os endereços.';
-        }
-        this.cdr.detectChanges();
-      }
-    });
   }
 
-  private normalizarRotaCalculada(calculada: RotaResponse, anterior: RotaResponse): RotaResponse {
-    const paradas = ((calculada.paradas || []) as Array<any>).map((p, paradaIndex) => {
-      const trechoKm = p.distanciaDoPontoAnteriorKm ?? p.distanciaTrechoKm;
-      const acumuladaKm = p.distanciaAcumuladaKm;
-      return {
-        ...p,
-        sequencia: p.sequencia ?? p.ordem ?? paradaIndex,
-        tipo: p.tipo === 'ORIGEM' ? 'BASE_ORIGEM' : p.tipo,
-        enderecoCompleto: p.enderecoCompleto ?? p.endereco ?? '',
-        distanciaTrechoKm: trechoKm,
-        distanciaTrechoFormatada: p.distanciaTrechoFormatada ?? (trechoKm == null ? '' : `${trechoKm.toFixed(2)} km`),
-        distanciaAcumuladaKm: acumuladaKm,
-        distanciaAcumuladaFormatada: p.distanciaAcumuladaFormatada ?? (acumuladaKm == null ? '' : `${acumuladaKm.toFixed(2)} km`),
-        encomendas: p.encomendas || [],
-        totalVolumes: p.totalVolumes ?? p.quantidadeEncomendas ?? p.encomendas?.length ?? 0
-      };
-    });
-    return {
-      ...anterior,
-      ...calculada,
-      identificador: calculada.identificador || anterior.identificador,
-      letra: calculada.letra || anterior.letra,
-      totalParadas: paradas.filter(p => p.tipo !== 'BASE_ORIGEM').length,
-      totalEncomendas: calculada.quantidadeEncomendas ?? anterior.totalEncomendas ?? 0,
-      paradas
-    };
+  alternarDetalhesRota(rota: RotaResponse): void {
+    this.rotaSelecionada = this.rotaSelecionada?.identificador === rota.identificador ? null : rota;
   }
 
   possuiCodigosRastreio(parada: Parada): boolean { return parada.encomendas.some(encomenda => !!encomenda.codigo?.trim()); }
@@ -188,12 +129,11 @@ export class App implements OnInit {
 
   exportarRotaComoCsv(): void {
     if (!this.rotaSelecionada) return;
-    const linhas = [['Rota', 'Ponto', 'Endereço', 'Complemento', 'Bairro', 'CEP', 'Objetos', 'Códigos']];
+    const linhas = [['Rota', 'Ponto', 'Endereço', 'Complemento', 'Bairro', 'CEP', 'Objetos']];
     this.paradasDaRotaSelecionada.forEach((p, index) => {
-      const codigos = p.encomendas.map(e => e.codigo).join('; ');
       linhas.push([
         this.rotaSelecionada!.identificador || '', String(index + 1), p.enderecoCompleto || '',
-        p.complemento || '', p.bairro || '', p.cep || '', String(p.totalVolumes), codigos
+        p.complemento || '', p.bairro || '', p.cep || '', String(p.totalVolumes)
       ]);
     });
     const csv = linhas.map(linha => linha.map(valor => `"${String(valor).replace(/"/g, '""')}"`).join(';')).join('\r\n');
@@ -211,8 +151,6 @@ export class App implements OnInit {
     this.rotas = [];
     this.rotaSelecionada = null;
     this.erroMensagem = null;
-    this.erroCalculoRota = null;
-    this.rotasEmCalculo.clear();
     if (this.fileInput) this.fileInput.nativeElement.value = '';
   }
 }

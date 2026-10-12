@@ -4,15 +4,14 @@ import br.com.romaneio.model.AnaliseRomaneioResponseDTO;
 import br.com.romaneio.model.EncomendaDTO;
 import br.com.romaneio.model.ImportacaoResponseDTO;
 import br.com.romaneio.model.RotaResponseDTO;
-import br.com.romaneio.exception.RomaneioException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -22,7 +21,6 @@ public class RomaneioService {
     private final ValidacaoService validacaoService;
     private final RoteirizacaoService roteirizacaoService;
     private final AgrupamentoService agrupamentoService;
-    private final LinkedHashMap<String, Map<String, List<EncomendaDTO>>> importacoesRecentes = new LinkedHashMap<>();
 
     public RomaneioService(PlanilhaParserService planilhaParserService, ValidacaoService validacaoService,
                            RoteirizacaoService roteirizacaoService, AgrupamentoService agrupamentoService) {
@@ -46,7 +44,6 @@ public class RomaneioService {
 
         List<String> avisos = new ArrayList<>(validacao.getAvisos());
         List<RotaResponseDTO> rotas = new ArrayList<>();
-        Map<String, List<EncomendaDTO>> rotasImportadas = new TreeMap<>();
         int totalPontos = 0;
         for (Map.Entry<String, List<EncomendaDTO>> entry : porRota.entrySet()) {
             if ("SEM-IDENTIFICADOR".equals(entry.getKey())) {
@@ -54,24 +51,26 @@ public class RomaneioService {
                 continue;
             }
             RotaResponseDTO resumo = roteirizacaoService.resumirRota(entry.getKey(), entry.getValue());
-            rotas.add(resumo);
-            rotasImportadas.put(entry.getKey(), entry.getValue());
             totalPontos += resumo.getQuantidadeParadas();
+            resumo.setBairros(listarBairrosDaRota(entry.getValue()));
+            int pontosPrioritarios = contarPontosBairrosPrioritarios(entry.getValue());
+            if (pontosPrioritarios == 0) continue;
+            resumo.setPontosBairrosPrioritarios(pontosPrioritarios);
+            rotas.add(resumo);
         }
 
         rotas.sort(java.util.Comparator.comparingInt(RotaResponseDTO::getQuantidadeParadas)
+                .thenComparing(java.util.Comparator.comparingInt(RotaResponseDTO::getPontosBairrosPrioritarios).reversed())
                 .thenComparing(RotaResponseDTO::getIdentificador, String.CASE_INSENSITIVE_ORDER));
-        List<RotaResponseDTO> melhores = rotas.stream().limit(5).toList();
+        List<RotaResponseDTO> melhores = rotas.stream().limit(10).toList();
         for (int i = 0; i < melhores.size(); i++) {
             melhores.get(i).setId(i + 1);
             melhores.get(i).setPrincipal(i == 0);
         }
+        if (melhores.isEmpty()) avisos.add("Nenhuma rota possui pontos de entrega nos bairros prioritários.");
 
-        String idImportacao = UUID.randomUUID().toString();
-        guardarImportacao(idImportacao, rotasImportadas);
         ImportacaoResponseDTO response = new ImportacaoResponseDTO(true,
-                "Planilha lida. As cinco rotas com menos pontos de entrega foram classificadas.");
-        response.setIdImportacao(idImportacao);
+                "Planilha lida. As dez rotas elegíveis foram ordenadas por pontos de entrega, do menor para o maior; empates favorecem mais pontos nas áreas prioritárias.");
         response.setTotalLinhasArquivo(brutas.size());
         response.setTotalEncomendasValidas(validas.size());
         response.setTotalParadasUnicas(totalPontos);
@@ -80,24 +79,80 @@ public class RomaneioService {
         return response;
     }
 
-    public synchronized RotaResponseDTO calcularRotaSelecionada(String idImportacao, String identificador) {
-        Map<String, List<EncomendaDTO>> rotas = importacoesRecentes.get(idImportacao);
-        if (rotas == null) {
-            throw new RomaneioException("Esta importação expirou. Importe novamente a planilha para calcular a rota.");
-        }
-        List<EncomendaDTO> encomendas = rotas.get(agrupamentoService.extrairLetraRota(identificador));
-        if (encomendas == null) {
-            throw new RomaneioException("A rota selecionada não pertence a esta importação.");
-        }
-        return roteirizacaoService.calcularRotaSelecionada(identificador, encomendas);
+    private int contarPontosBairrosPrioritarios(List<EncomendaDTO> encomendas) {
+        List<EncomendaDTO> entregasPrioritarias = encomendas.stream()
+                .filter(encomenda -> bairroAlvo(encomenda.getBairro())).toList();
+        return agrupamentoService.contarEnderecosUnicos(entregasPrioritarias);
     }
 
-    private synchronized void guardarImportacao(String id, Map<String, List<EncomendaDTO>> rotas) {
-        importacoesRecentes.put(id, rotas);
-        while (importacoesRecentes.size() > 5) {
-            String maisAntiga = importacoesRecentes.keySet().iterator().next();
-            importacoesRecentes.remove(maisAntiga);
+    private List<String> listarBairrosDaRota(List<EncomendaDTO> encomendas) {
+        Map<String, String> bairrosUnicos = new LinkedHashMap<>();
+        for (EncomendaDTO encomenda : encomendas) {
+            String bairro = encomenda.getBairro();
+            if (bairro == null || bairro.isBlank()) continue;
+            String nomeExibicao = nomeBairroCanonico(bairro);
+            String chave = normalizarBairro(nomeExibicao)
+                    .replaceAll("\\b(jd|jdm|jard)\\b", "jardim")
+                    .replaceAll("\\b(atl|atlant)\\b", "atlantico");
+            bairrosUnicos.putIfAbsent(chave, nomeExibicao);
         }
+        List<String> bairros = bairrosUnicos.values().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+        boolean possuiSubdivisaoJardimAtlantico = bairros.stream()
+                .anyMatch(nome -> nome.startsWith("Jardim Atlântico "));
+        if (possuiSubdivisaoJardimAtlantico) {
+            bairros = bairros.stream().filter(nome -> !nome.equals("Jardim Atlântico")).toList();
+        }
+        return bairros;
+    }
+
+    private String nomeBairroCanonico(String bairro) {
+        String normalizado = normalizarBairro(bairro);
+        if (normalizado.matches(".*\\bbarroco\\b.*")) return "Barroco";
+        boolean praiaDeItaipuacu = normalizado.matches(".*\\b(praia|pr)\\b.*")
+                && normalizado.matches(".*\\bitaip(?:u|i)acu\\b.*");
+        if (praiaDeItaipuacu) return "Praia de Itaipuaçu";
+        boolean abreviacaoJardimAtlantico = normalizado.matches(
+                ".*\\b(ja|j|jd|jdm|jard|jardm|jrdm|jardim)\\s*(atlantico|atlant|atl)[a-z]*\\b.*")
+                || normalizado.matches(".*\\bja\\s+(oeste|oest|leste|lest|central|centr|cen|c)\\b.*")
+                || normalizado.matches(".*\\bjardim\\s+a\\s+(oeste|oest|leste|lest|central|centr|cen)\\b.*");
+        boolean contextoJardimAtlantico = normalizado.contains("atlantico")
+                && (normalizado.contains("itaipuacu") || normalizado.contains("itaipiacu")
+                    || normalizado.matches(".*\\b(oeste|oest|leste|lest|central|centr|cen)\\b.*")
+                    || normalizado.matches(".*atlantico(central|centr|leste|lest|oeste|oest).*"));
+        if (abreviacaoJardimAtlantico || contextoJardimAtlantico) {
+            String regiao = normalizado.matches(".*oest[a-z]*.*") ? "Oeste"
+                    : normalizado.matches(".*lest[a-z]*.*") || normalizado.matches(".*atlantico\\s+l(?:\\s|$).*") ? "Leste"
+                    : normalizado.matches(".*(central|centr|cen)[a-z]*.*")
+                        || normalizado.matches(".*atlantico\\s+c(?:\\s|$).*")
+                        || normalizado.matches(".*atlantico(c|cent).*" ) ? "Central" : "";
+            return regiao.isBlank() ? "Jardim Atlântico" : "Jardim Atlântico " + regiao;
+        }
+        if (normalizado.matches(".*\\bitaip(?:u|i)acu\\b.*")) return "Itaipuaçu";
+        return bairro.trim().replaceAll("\\s+", " ");
+    }
+
+    private String normalizarBairro(String bairro) {
+        return Normalizer.normalize(bairro.toLowerCase(java.util.Locale.ROOT), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replaceAll("[^a-z0-9\\s]", " ")
+                .replaceAll("\\s+", " ").trim()
+                .replaceAll("\\bitaiupacu\\b", "itaipuacu")
+                .replaceAll("\\bitapuacu\\b", "itaipuacu");
+    }
+
+    private boolean bairroAlvo(String bairro) {
+        if (bairro == null || bairro.isBlank()) return false;
+        String normalizado = normalizarBairro(bairro);
+        boolean jardimAtlantico = normalizado.matches(
+                ".*\\b(jardim|jard|jdm|jd|jrdm|j)\\s*(atlantico|atlant|atl)[a-z]*\\b.*")
+                || normalizado.matches(".*\\bja\\s+(oeste|oest|leste|lest|central|centr|cen|c)\\b.*")
+                || normalizado.contains("atlantico")
+                    && (normalizado.matches(".*\\b(oeste|oest|leste|lest|central|centr|cen)\\b.*")
+                        || normalizado.matches(".*atlantico(central|centr|leste|lest|oeste|oest).*"));
+        boolean barroco = normalizado.matches(".*\\bbarroco\\b.*");
+        boolean praiaDeItaipuacu = normalizado.matches(".*\\b(praia|pr)\\b.*")
+                && normalizado.matches(".*\\bitaip(?:u|i)acu\\b.*");
+        return jardimAtlantico || barroco || praiaDeItaipuacu;
     }
 
     /** Agrupamento cadastral não necessita de geocodificação nem consultas externas. */

@@ -58,6 +58,8 @@ export interface RotaResponse {
   totalParadas?: number;
   quantidadeEncomendas?: number;
   totalEncomendas?: number;
+  pontosBairrosPrioritarios?: number;
+  bairros?: string[];
   paradas: Parada[];
   origem?: Parada;
   ultimaParada?: Parada;
