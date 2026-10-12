@@ -36,7 +36,7 @@ class PlanilhaParserServiceTest {
 
         List<EncomendaDTO> lista = parserService.parse(file);
         assertEquals(2, lista.size());
-        assertEquals("1", lista.get(0).getCodigo());
+        assertTrue(lista.get(0).getCodigo() == null || lista.get(0).getCodigo().isBlank(), "Sequence é a posição da linha, não um código único de pacote");
         assertEquals("24933-175", lista.get(0).getCep());
         assertEquals("Rua 115", lista.get(0).getLogradouro());
         assertEquals("23", lista.get(0).getNumero());
@@ -89,7 +89,7 @@ class PlanilhaParserServiceTest {
 
         List<EncomendaDTO> lista = parserService.parse(file);
         assertEquals(1, lista.size());
-        assertEquals("101", lista.get(0).getCodigo());
+        assertTrue(lista.get(0).getCodigo() == null || lista.get(0).getCodigo().isBlank(), "Sequence não deve ser interpretado como identificador da encomenda");
         assertEquals("Rua Dois", lista.get(0).getLogradouro());
         assertEquals("349", lista.get(0).getNumero());
         assertNotNull(lista.get(0).getLatitude());

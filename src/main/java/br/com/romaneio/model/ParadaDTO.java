@@ -9,6 +9,7 @@ public class ParadaDTO {
     private String endereco;
     private String logradouro;
     private String numero;
+    private String complemento;
     private String bairro;
     private String cidade;
     private String uf;
@@ -78,6 +79,9 @@ public class ParadaDTO {
     public void setNumero(String numero) {
         this.numero = numero;
     }
+
+    public String getComplemento() { return complemento; }
+    public void setComplemento(String complemento) { this.complemento = complemento; }
 
     public String getBairro() {
         return bairro;

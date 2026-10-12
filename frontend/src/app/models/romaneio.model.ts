@@ -5,6 +5,7 @@ export interface Coordenada {
 
 export interface Encomenda {
   codigo: string;
+  sequence?: string;
   cep?: string;
   logradouro?: string;
   numero?: string;
@@ -27,13 +28,14 @@ export interface Parada {
   bairro?: string;
   cidade?: string;
   uf?: string;
+  complemento?: string;
   enderecoCompleto: string;
-  latitude: number;
-  longitude: number;
-  distanciaTrechoKm: number;
-  distanciaTrechoFormatada: string;
-  distanciaAcumuladaKm: number;
-  distanciaAcumuladaFormatada: string;
+  latitude?: number;
+  longitude?: number;
+  distanciaTrechoKm?: number;
+  distanciaTrechoFormatada?: string;
+  distanciaAcumuladaKm?: number;
+  distanciaAcumuladaFormatada?: string;
   encomendas: Encomenda[];
   totalVolumes: number;
 }
@@ -41,16 +43,17 @@ export interface Parada {
 export interface RotaResponse {
   id?: number;
   letra?: string;
+  identificador?: string;
   nome?: string;
   descricao?: string;
   principal?: boolean;
   posicao?: number;
   estrategia?: string;
   recomendada?: boolean;
-  distanciaTotalKm: number;
-  distanciaTotalFormatada: string;
-  tempoEstimadoFormatado: string;
-  tempoEstimadoMinutos: number;
+  distanciaTotalKm?: number;
+  distanciaTotalFormatada?: string;
+  tempoEstimadoFormatado?: string;
+  tempoEstimadoMinutos?: number;
   quantidadeParadas?: number;
   totalParadas?: number;
   quantidadeEncomendas?: number;
@@ -61,6 +64,7 @@ export interface RotaResponse {
 }
 
 export interface ImportacaoResponse {
+  idImportacao?: string;
   sucesso: boolean;
   mensagem: string;
   nomeArquivoOriginal: string;
@@ -75,6 +79,7 @@ export interface ImportacaoResponse {
 
 export interface BaseFixa {
   nome: string;
+  complemento?: string;
   enderecoCompleto: string;
   logradouro: string;
   numero: string;
@@ -82,6 +87,6 @@ export interface BaseFixa {
   cidade: string;
   uf: string;
   cep: string;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
 }

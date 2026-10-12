@@ -6,6 +6,7 @@ import java.util.List;
 public class RotaResponseDTO {
     private int id;
     private String letra;
+    private String identificador;
     private String nome;
     private String descricao;
     private boolean principal;
@@ -49,6 +50,10 @@ public class RotaResponseDTO {
     public void setLetra(String letra) {
         this.letra = letra;
     }
+
+    public String getIdentificador() { return identificador; }
+
+    public void setIdentificador(String identificador) { this.identificador = identificador; }
 
     public String getNome() {
         return nome;

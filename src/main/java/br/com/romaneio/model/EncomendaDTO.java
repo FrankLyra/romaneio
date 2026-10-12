@@ -4,6 +4,7 @@ import java.util.Objects;
 
 public class EncomendaDTO {
     private String codigo;
+    private String sequence;
     private String cep;
     private String logradouro;
     private String numero;
@@ -86,6 +87,14 @@ public class EncomendaDTO {
 
     public void setCodigo(String codigo) {
         this.codigo = codigo;
+    }
+
+    public String getSequence() {
+        return sequence;
+    }
+
+    public void setSequence(String sequence) {
+        this.sequence = sequence;
     }
 
     public String getCep() {

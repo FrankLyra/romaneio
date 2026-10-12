@@ -159,6 +159,7 @@ public class PlanilhaParserService {
 
     private EncomendaDTO extrairLinha(Map<String, Integer> colunas, ValorCelulaProvider provider) {
         String codigo = colunas.containsKey("codigo") ? provider.get(colunas.get("codigo")) : "";
+        String sequence = colunas.containsKey("sequence") ? provider.get(colunas.get("sequence")) : "";
         String cep = colunas.containsKey("cep") ? provider.get(colunas.get("cep")) : "";
         String enderecoCompleto = colunas.containsKey("endereco") ? provider.get(colunas.get("endereco")) : "";
         String logradouro = colunas.containsKey("logradouro") ? provider.get(colunas.get("logradouro")) : "";
@@ -190,6 +191,7 @@ public class PlanilhaParserService {
 
         EncomendaDTO dto = new EncomendaDTO();
         dto.setCodigo(codigo);
+        dto.setSequence(sequence);
         dto.setCep(cep);
         dto.setLogradouro(logradouro);
         dto.setNumero(numero.isEmpty() ? "S/N" : numero);
@@ -259,8 +261,9 @@ public class PlanilhaParserService {
             String col = normalizarTexto(cabecalhos[i]);
             if (col.isEmpty()) continue;
 
-            if (col.contains("sequence") || col.contains("codigo") || col.contains("id") ||
-                    col.contains("volume") || col.contains("pacote") || col.contains("tracking") || col.contains("objeto")) {
+            if (col.equals("sequence") || col.equals("sequencia")) {
+                map.putIfAbsent("sequence", i);
+            } else if (col.contains("codigo") || col.contains("tracking") || col.contains("rastreio") || col.contains("waybill") || col.contains("barcode") || col.matches(".*\\b(id|identifier)\\b.*")) {
                 map.putIfAbsent("codigo", i);
             } else if (col.contains("zipcode") || col.contains("cep") || col.contains("postal")) {
                 map.putIfAbsent("cep", i);
@@ -286,11 +289,6 @@ public class PlanilhaParserService {
             } else if (col.contains("longitude") || col.equals("long") || col.equals("lng") || col.equals("lon")) {
                 map.putIfAbsent("longitude", i);
             }
-        }
-
-        // Se não encontrou código mas tem primeira coluna, usa como código/sequência
-        if (!map.containsKey("codigo") && cabecalhos.length > 0) {
-            map.put("codigo", 0);
         }
 
         return map;

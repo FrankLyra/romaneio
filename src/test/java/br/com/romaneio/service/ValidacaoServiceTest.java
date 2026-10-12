@@ -44,16 +44,17 @@ class ValidacaoServiceTest {
     }
 
     @Test
-    void deveIgnorarLinhasSemCodigoOuLogradouro() {
+    void deveAceitarLinhaSemCodigoEIgnorarSomenteFaltaDeLogradouro() {
         List<EncomendaDTO> lista = new ArrayList<>();
         lista.add(new EncomendaDTO("", "24933-175", "Rua 115", "23", "", "Itaipuaçu", "Maricá", "RJ"));
         lista.add(new EncomendaDTO("ENC02", "24933-180", "", "10", "", "Itaipuaçu", "Maricá", "RJ"));
         lista.add(new EncomendaDTO("ENC03", "24933-180", "Rua Válida", "10", "", "Itaipuaçu", "Maricá", "RJ"));
 
         ValidacaoService.ResultadoValidacao res = validacaoService.validarEncomendas(lista);
-        assertEquals(1, res.getEncomendasValidas().size());
-        assertEquals(2, res.getTotalInvalidos());
-        assertEquals("ENC03", res.getEncomendasValidas().get(0).getCodigo());
+        assertEquals(2, res.getEncomendasValidas().size());
+        assertEquals(1, res.getTotalInvalidos());
+        assertTrue(res.getEncomendasValidas().get(0).getCodigo().isBlank());
+        assertEquals("ENC03", res.getEncomendasValidas().get(1).getCodigo());
     }
 
     @Test

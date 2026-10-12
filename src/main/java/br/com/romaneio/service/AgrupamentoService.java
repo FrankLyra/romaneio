@@ -9,13 +9,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class AgrupamentoService {
-
-    /**
-     * Realiza a análise completa de agrupamento das encomendas:
-     * 1. Separa por Letra de Rota
-     * 2. Agrupa por Rua (com contagem de entregas por rua)
-     * 3. Agrupa por Endereço Único / Ponto de Parada (com contagem de pacotes para o mesmo local)
-     */
     public AnaliseRomaneioResponseDTO analisarAgrupamentos(List<EncomendaDTO> encomendas) {
         if (encomendas == null || encomendas.isEmpty()) {
             AnaliseRomaneioResponseDTO vazio = new AnaliseRomaneioResponseDTO(true, "Nenhuma encomenda fornecida para análise.");
@@ -24,217 +17,128 @@ public class AgrupamentoService {
             return vazio;
         }
 
-        // 1. Agrupar por Letra da Rota
-        Map<String, List<EncomendaDTO>> porLetra = encomendas.stream()
-                .collect(Collectors.groupingBy(
-                        enc -> extrairLetraRota(enc.getCorredor()),
-                        TreeMap::new,
-                        Collectors.toList()
-                ));
-
-        List<ResumoRotaLetraDTO> rotasDTO = new ArrayList<>();
-        int totalParadasUnicasGeral = 0;
-        Set<String> chavesRuasGerais = new HashSet<>();
-
-        for (Map.Entry<String, List<EncomendaDTO>> entry : porLetra.entrySet()) {
-            String letra = entry.getKey();
-            List<EncomendaDTO> encomendasDaRota = entry.getValue();
-
-            ResumoRotaLetraDTO resumoRota = agruparRotaPorRuasEEnderecos(letra, encomendasDaRota);
-            rotasDTO.add(resumoRota);
-
-            totalParadasUnicasGeral += resumoRota.getTotalParadasUnicas();
-            for (ResumoRuaDTO rua : resumoRota.getRuas()) {
-                chavesRuasGerais.add(gerarChaveRua(rua.getNomeRua(), rua.getBairro(), rua.getCep()));
+        Map<String, List<EncomendaDTO>> porRota = encomendas.stream().collect(Collectors.groupingBy(
+                e -> normalizarIdentificador(e.getCorredor()), TreeMap::new, Collectors.toList()));
+        List<ResumoRotaLetraDTO> rotas = new ArrayList<>();
+        Set<String> ruasUnicas = new HashSet<>();
+        int paradasUnicas = 0;
+        for (var entry : porRota.entrySet()) {
+            ResumoRotaLetraDTO resumo = agruparRotaPorRuasEEnderecos(entry.getKey(), entry.getValue());
+            rotas.add(resumo);
+            paradasUnicas += resumo.getTotalParadasUnicas();
+            for (ResumoRuaDTO rua : resumo.getRuas()) {
+                ruasUnicas.add(entry.getKey() + "|" + chaveRua(rua.getNomeRua()) + "|" + normalizar(rua.getBairro()));
             }
         }
-
         AnaliseRomaneioResponseDTO response = new AnaliseRomaneioResponseDTO(true, "Análise de agrupamento concluída com sucesso.");
         response.setTotalLinhasLidas(encomendas.size());
         response.setTotalEncomendasValidas(encomendas.size());
-        response.setTotalRotasIdentificadas(rotasDTO.size());
-        response.setTotalRuasDistintas(chavesRuasGerais.size());
-        response.setTotalParadasUnicas(totalParadasUnicasGeral);
-        response.setRotasPorLetra(rotasDTO);
-
+        response.setTotalRotasIdentificadas(rotas.size());
+        response.setTotalRuasDistintas(ruasUnicas.size());
+        response.setTotalParadasUnicas(paradasUnicas);
+        response.setRotasPorLetra(rotas);
         return response;
     }
 
-    /**
-     * Para uma dada rota/letra, agrupa as encomendas em ruas e cada rua em endereços únicos.
-     */
-    public ResumoRotaLetraDTO agruparRotaPorRuasEEnderecos(String letraRota, List<EncomendaDTO> encomendas) {
-        // Agrupar encomendas da rota por rua (chave: logradouro normalizado + bairro normalizado + prefixo CEP)
-        Map<String, List<EncomendaDTO>> porRua = encomendas.stream()
-                .collect(Collectors.groupingBy(
-                        enc -> gerarChaveRua(enc.getLogradouro(), enc.getBairro(), enc.getCep()),
-                        LinkedHashMap::new,
-                        Collectors.toList()
-                ));
-
-        List<ResumoRuaDTO> listaRuas = new ArrayList<>();
-        int totalParadasRota = 0;
-
-        for (List<EncomendaDTO> encsDaRua : porRua.values()) {
-            if (encsDaRua.isEmpty()) continue;
-
-            // Extrai dados representativos da rua
-            EncomendaDTO primeira = encsDaRua.get(0);
-            String nomeRua = formatarNomeRua(primeira.getLogradouro());
-            String bairro = primeira.getBairro() != null && !primeira.getBairro().isBlank() ? primeira.getBairro().trim() : "Bairro não informado";
-            String cep = primeira.getCep() != null ? primeira.getCep() : "";
-
-            // Agrupar dentro da rua por endereço físico único
-            Map<String, List<EncomendaDTO>> porEndereco = encsDaRua.stream()
-                    .collect(Collectors.groupingBy(
-                            this::gerarChaveEnderecoUnico,
-                            LinkedHashMap::new,
-                            Collectors.toList()
-                    ));
-
-            List<ResumoEnderecoDTO> listaEnderecos = new ArrayList<>();
-
-            for (List<EncomendaDTO> encsDoEndereco : porEndereco.values()) {
-                if (encsDoEndereco.isEmpty()) continue;
-
-                EncomendaDTO ref = encsDoEndereco.get(0);
-                List<String> codigos = encsDoEndereco.stream()
-                        .map(EncomendaDTO::getCodigo)
-                        .filter(Objects::nonNull)
-                        .filter(c -> !c.isBlank())
-                        .collect(Collectors.toList());
-
-                // Se houver coordenada em alguma das encomendas do endereço, utiliza
-                Double lat = encsDoEndereco.stream()
-                        .map(EncomendaDTO::getLatitude)
-                        .filter(Objects::nonNull)
-                        .findFirst()
-                        .orElse(null);
-
-                Double lon = encsDoEndereco.stream()
-                        .map(EncomendaDTO::getLongitude)
-                        .filter(Objects::nonNull)
-                        .findFirst()
-                        .orElse(null);
-
-                ResumoEnderecoDTO endDTO = new ResumoEnderecoDTO(
-                        ref.getEnderecoCompleto(),
-                        ref.getLogradouro(),
-                        ref.getNumero(),
-                        ref.getComplemento(),
-                        ref.getBairro(),
-                        ref.getCep(),
-                        lat,
-                        lon,
-                        encsDoEndereco.size(),
-                        codigos
-                );
-
-                listaEnderecos.add(endDTO);
+    public ResumoRotaLetraDTO agruparRotaPorRuasEEnderecos(String identificadorRota, List<EncomendaDTO> encomendas) {
+        List<List<EncomendaDTO>> gruposRua = agrupar(encomendas, this::mesmaRua);
+        List<ResumoRuaDTO> ruas = new ArrayList<>();
+        int totalParadas = 0;
+        for (List<EncomendaDTO> grupo : gruposRua) {
+            EncomendaDTO refRua = grupo.get(0);
+            String nomeRua = refRua.getLogradouro() == null ? "Logradouro não informado" : refRua.getLogradouro().trim();
+            List<List<EncomendaDTO>> gruposEndereco = agrupar(grupo, this::mesmoEndereco);
+            List<ResumoEnderecoDTO> enderecos = new ArrayList<>();
+            for (List<EncomendaDTO> entregas : gruposEndereco) {
+                EncomendaDTO ref = entregas.get(0);
+                Double lat = entregas.stream().map(EncomendaDTO::getLatitude).filter(Objects::nonNull).findFirst().orElse(null);
+                Double lon = entregas.stream().map(EncomendaDTO::getLongitude).filter(Objects::nonNull).findFirst().orElse(null);
+                List<String> codigos = entregas.stream().map(EncomendaDTO::getCodigo).filter(Objects::nonNull).distinct().toList();
+                enderecos.add(new ResumoEnderecoDTO(ref.getEnderecoCompleto(), ref.getLogradouro(), ref.getNumero(),
+                        ref.getComplemento(), ref.getBairro(), ref.getCep(), lat, lon, entregas.size(), codigos));
             }
-
-            // Ordenar endereços por número (se numérico) para facilitar visualização
-            listaEnderecos.sort((a, b) -> compararNumerosEndereco(a.getNumero(), b.getNumero()));
-
-            ResumoRuaDTO resumoRua = new ResumoRuaDTO(
-                    nomeRua,
-                    bairro,
-                    cep,
-                    encsDaRua.size(),       // Total de encomendas/volumes na rua
-                    listaEnderecos.size(),   // Total de paradas/endereços distintos na rua
-                    listaEnderecos
-            );
-
-            listaRuas.add(resumoRua);
-            totalParadasRota += listaEnderecos.size();
+            enderecos.sort((a, b) -> compararNumeros(a.getNumero(), b.getNumero()));
+            String cep = refRua.getCep();
+            ruas.add(new ResumoRuaDTO(nomeRua, refRua.getBairro(), cep, grupo.size(), enderecos.size(), enderecos));
+            totalParadas += enderecos.size();
         }
-
-        // Ordenar ruas pelo volume de entregas (decrescente)
-        listaRuas.sort((r1, r2) -> Integer.compare(r2.getTotalEntregas(), r1.getTotalEntregas()));
-
-        return new ResumoRotaLetraDTO(
-                letraRota,
-                encomendas.size(),
-                listaRuas.size(),
-                totalParadasRota,
-                listaRuas
-        );
+        ruas.sort(Comparator.comparingInt(ResumoRuaDTO::getTotalEntregas).reversed());
+        return new ResumoRotaLetraDTO(identificadorRota, encomendas == null ? 0 : encomendas.size(), ruas.size(), totalParadas, ruas);
     }
 
-    /**
-     * Extrai a letra da rota do campo corredor/rota (ex: 'A-01' -> 'A', 'ROTA B' -> 'B', 'C' -> 'C').
-     */
-    public String extrairLetraRota(String corredor) {
-        if (corredor == null || corredor.isBlank()) {
-            return "A"; // Padrão se não informado
+    public String extrairLetraRota(String corredor) { return normalizarIdentificador(corredor); }
+
+    private List<List<EncomendaDTO>> agrupar(List<EncomendaDTO> itens, Comparador comparador) {
+        List<List<EncomendaDTO>> grupos = new ArrayList<>();
+        if (itens == null) return grupos;
+        for (EncomendaDTO item : itens) {
+            List<EncomendaDTO> existente = grupos.stream().filter(g -> comparador.iguais(g.get(0), item)).findFirst().orElse(null);
+            if (existente == null) { existente = new ArrayList<>(); grupos.add(existente); }
+            existente.add(item);
         }
+        return grupos;
+    }
 
-        String limpo = corredor.trim().toUpperCase();
+    private boolean mesmaRua(EncomendaDTO a, EncomendaDTO b) {
+        if (!compatibilidadeLocal(a, b)) return false;
+        String ruaA = chaveRua(a.getLogradouro()), ruaB = chaveRua(b.getLogradouro());
+        return ruaA.equals(ruaB) || nomesParecidos(ruaA, ruaB);
+    }
 
-        // Se contiver palavra 'ROTA X' ou 'ROUTE X'
-        if (limpo.startsWith("ROTA") || limpo.startsWith("ROUTE")) {
-            String resto = limpo.replace("ROTA", "").replace("ROUTE", "").trim();
-            if (!resto.isEmpty() && Character.isLetter(resto.charAt(0))) {
-                return String.valueOf(resto.charAt(0));
-            }
+    private boolean mesmoEndereco(EncomendaDTO a, EncomendaDTO b) {
+        String numeroA = normalizar(a.getNumero()), numeroB = normalizar(b.getNumero());
+        String cepA = digitos(a.getCep()), cepB = digitos(b.getCep());
+        // Sem número ou CEP não há dados suficientes para afirmar que é o mesmo endereço.
+        return !numeroA.isBlank() && numeroA.equals(numeroB)
+                && !cepA.isBlank() && cepA.equals(cepB)
+                && nomesDeRuaCompativeis(a.getLogradouro(), b.getLogradouro());
+    }
+
+    private boolean nomesDeRuaCompativeis(String logradouroA, String logradouroB) {
+        String ruaA = chaveRua(logradouroA), ruaB = chaveRua(logradouroB);
+        return !ruaA.isBlank() && (ruaA.equals(ruaB) || nomesParecidos(ruaA, ruaB));
+    }
+
+    private boolean compatibilidadeLocal(EncomendaDTO a, EncomendaDTO b) {
+        String bairroA = normalizar(a.getBairro()), bairroB = normalizar(b.getBairro());
+        if (!bairroA.isBlank() && !bairroB.isBlank() && !bairroA.equals(bairroB)) return false;
+        String cepA = digitos(a.getCep()), cepB = digitos(b.getCep());
+        return cepA.isBlank() || cepB.isBlank() || cepA.equals(cepB);
+    }
+
+    private boolean nomesParecidos(String a, String b) {
+        if (a.isBlank() || b.isBlank()) return false;
+        String[] ta = a.split(" "), tb = b.split(" ");
+        if (Math.abs(ta.length - tb.length) > 1) return false;
+        int i = 0, j = 0, divergencias = 0;
+        while (i < ta.length && j < tb.length) {
+            if (ta[i].equals(tb[j]) || ta[i].startsWith(tb[j]) || tb[j].startsWith(ta[i])) { i++; j++; continue; }
+            if (++divergencias > 1) return false;
+            if (ta.length > tb.length) i++; else if (tb.length > ta.length) j++; else { i++; j++; }
         }
-
-        // Procura a primeira letra relevante
-        for (int i = 0; i < limpo.length(); i++) {
-            char c = limpo.charAt(i);
-            if (c >= 'A' && c <= 'Z') {
-                return String.valueOf(c);
-            }
-        }
-
-        return limpo;
+        divergencias += (ta.length - i) + (tb.length - j);
+        return divergencias <= 1;
     }
 
-    private String gerarChaveRua(String logradouro, String bairro, String cep) {
-        String logNorm = normalizarTexto(logradouro);
-        String baiNorm = normalizarTexto(bairro);
-        String cepNorm = cep != null ? cep.replaceAll("[^0-9]", "") : "";
-        String cepPrefixo = cepNorm.length() >= 5 ? cepNorm.substring(0, 5) : cepNorm;
-
-        return logNorm + "|" + baiNorm + "|" + cepPrefixo;
+    private String chaveRua(String valor) {
+        String rua = normalizar(valor).replaceFirst("^(rua|r|avenida|av|travessa|tv|estrada|estr|rodovia|rod|alameda|al)\\s+", "");
+        return rua.replaceAll("\\b(jose)\\s+g\\s+", "$1 goncalves ");
     }
-
-    private String gerarChaveEnderecoUnico(EncomendaDTO enc) {
-        String cepDigitos = enc.getCep() != null ? enc.getCep().replaceAll("[^0-9]", "") : "";
-        String logNorm = normalizarTexto(enc.getLogradouro());
-        String numNorm = normalizarTexto(enc.getNumero());
-        String compNorm = normalizarTexto(enc.getComplemento());
-        String baiNorm = normalizarTexto(enc.getBairro());
-
-        return cepDigitos + "|" + logNorm + "|" + numNorm + "|" + compNorm + "|" + baiNorm;
+    private String normalizarIdentificador(String valor) {
+        if (valor == null || valor.isBlank()) return "SEM-IDENTIFICADOR";
+        String id = valor.trim().toUpperCase(Locale.ROOT).replaceAll("\\s+", "");
+        if (id.startsWith("ROTA")) id = id.substring(4);
+        return id.isBlank() ? "SEM-IDENTIFICADOR" : id;
     }
-
-    private String formatarNomeRua(String logradouro) {
-        if (logradouro == null || logradouro.isBlank()) {
-            return "Logradouro não informado";
-        }
-        return logradouro.trim();
+    private String normalizar(String valor) {
+        if (valor == null) return "";
+        return Normalizer.normalize(valor.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "").replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
     }
-
-    private String normalizarTexto(String str) {
-        if (str == null) return "";
-        String nfd = Normalizer.normalize(str.toLowerCase().trim(), Normalizer.Form.NFD);
-        return nfd.replaceAll("[\\p{InCombiningDiacriticalMarks}]", "")
-                .replaceAll("[^a-z0-9\\s]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
+    private String digitos(String valor) { return valor == null ? "" : valor.replaceAll("[^0-9]", ""); }
+    private int compararNumeros(String a, String b) {
+        try { return Integer.compare(Integer.parseInt(digitos(a)), Integer.parseInt(digitos(b))); }
+        catch (NumberFormatException e) { return Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER).compare(a, b); }
     }
-
-    private int compararNumerosEndereco(String num1, String num2) {
-        if (num1 == null) return -1;
-        if (num2 == null) return 1;
-
-        try {
-            int n1 = Integer.parseInt(num1.replaceAll("[^0-9]", ""));
-            int n2 = Integer.parseInt(num2.replaceAll("[^0-9]", ""));
-            return Integer.compare(n1, n2);
-        } catch (Exception e) {
-            return num1.compareToIgnoreCase(num2);
-        }
-    }
+    @FunctionalInterface private interface Comparador { boolean iguais(EncomendaDTO a, EncomendaDTO b); }
 }

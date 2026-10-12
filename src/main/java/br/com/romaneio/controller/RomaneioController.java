@@ -26,8 +26,7 @@ public class RomaneioController {
 
     /**
      * Endpoint principal de importação de planilha de encomendas (.xlsx ou .csv).
-     * Dispara o pipeline de validação, geocodificação e roteirização das 5 melhores alternativas.
-     * Retorna o array JSON contendo as 5 rotas calculadas para o frontend Angular.
+     * Endpoint legado que retorna o resumo das rotas ordenadas por quantidade de pontos.
      */
     @PostMapping(value = "/importar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<List<RotaResponseDTO>> importarPlanilha(
@@ -37,13 +36,21 @@ public class RomaneioController {
     }
 
     /**
-     * Endpoint complementar que retorna o relatório completo da importação com metadados e avisos.
+     * Lê a planilha e classifica cinco rotas por quantidade de pontos únicos, sem geolocalizar.
      */
     @PostMapping(value = "/processar-completo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ImportacaoResponseDTO> processarPlanilhaCompleta(
             @RequestParam("file") MultipartFile file) {
-        ImportacaoResponseDTO resultado = romaneioService.processarPlanilha(file);
+        ImportacaoResponseDTO resultado = romaneioService.prepararPlanilha(file);
         return ResponseEntity.ok(resultado);
+    }
+
+    /** Geocodifica e calcula a distância/tempo somente para a rota escolhida na interface. */
+    @PostMapping(value = "/{idImportacao}/rotas/{identificador}/calcular")
+    public ResponseEntity<RotaResponseDTO> calcularRotaSelecionada(
+            @PathVariable String idImportacao,
+            @PathVariable String identificador) {
+        return ResponseEntity.ok(romaneioService.calcularRotaSelecionada(idImportacao, identificador));
     }
 
     /**
@@ -70,9 +77,7 @@ public class RomaneioController {
                 "bairro", BaseFixaConstants.BAIRRO,
                 "cidade", BaseFixaConstants.CIDADE,
                 "uf", BaseFixaConstants.UF,
-                "cep", BaseFixaConstants.CEP,
-                "latitude", BaseFixaConstants.LATITUDE,
-                "longitude", BaseFixaConstants.LONGITUDE
+                "cep", BaseFixaConstants.CEP
         );
         return ResponseEntity.ok(base);
     }

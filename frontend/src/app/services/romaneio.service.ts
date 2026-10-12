@@ -28,11 +28,16 @@ export class RomaneioService {
   }
 
   /**
-   * Processa a planilha retornando o resultado completo com metadados, validações e as rotas
+   * Importa sem geocodificar; classifica rotas pelo número de pontos de entrega únicos.
    */
   processarPlanilhaCompleta(file: File): Observable<ImportacaoResponse> {
     const formData = new FormData();
     formData.append('file', file);
     return this.http.post<ImportacaoResponse>(`${this.baseUrl}/processar-completo`, formData);
+  }
+
+  calcularRotaSelecionada(idImportacao: string, identificador: string): Observable<RotaResponse> {
+    const rota = encodeURIComponent(identificador);
+    return this.http.post<RotaResponse>(`${this.baseUrl}/${idImportacao}/rotas/${rota}/calcular`, {});
   }
 }

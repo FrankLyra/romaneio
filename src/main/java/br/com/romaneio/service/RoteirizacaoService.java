@@ -1,464 +1,273 @@
 package br.com.romaneio.service;
 
+import br.com.romaneio.client.ExternalMapClient;
+import br.com.romaneio.model.CoordenadaDTO;
 import br.com.romaneio.model.EncomendaDTO;
 import br.com.romaneio.model.ParadaDTO;
 import br.com.romaneio.model.RotaResponseDTO;
+import br.com.romaneio.exception.RomaneioException;
 import br.com.romaneio.util.BaseFixaConstants;
 import br.com.romaneio.util.GeoUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class RoteirizacaoService {
+    private static final int MAX_PONTOS_POR_ROTA = 200;
+    private final ExternalMapClient mapClient;
+    private final GeocodificacaoService geocodificacaoService;
+
+    /** Mantido para compatibilidade com instanciações manuais antigas. */
+    public RoteirizacaoService() { this.mapClient = null; this.geocodificacaoService = null; }
+
+    @Autowired
+    public RoteirizacaoService(ExternalMapClient mapClient, GeocodificacaoService geocodificacaoService) {
+        this.mapClient = mapClient;
+        this.geocodificacaoService = geocodificacaoService;
+    }
 
     public List<RotaResponseDTO> calcularMelhoresRotas(List<EncomendaDTO> encomendas) {
+        return calcularComAvisos(encomendas).rotas();
+    }
+
+    /** Resumo sem geocodificação para classificar rotas pelo número de pontos únicos. */
+    public RotaResponseDTO resumirRota(String identificador, List<EncomendaDTO> encomendas) {
+        List<ParadaAgrupada> paradas = consolidarParadas(encomendas);
+        RotaResponseDTO rota = new RotaResponseDTO();
+        rota.setIdentificador(identificador);
+        rota.setLetra(identificador.contains("-") ? identificador.substring(0, identificador.indexOf('-')) : identificador);
+        rota.setNome("Rota " + identificador);
+        rota.setDescricao("Classificada pela quantidade de pontos de entrega únicos.");
+        rota.setQuantidadeParadas(paradas.size());
+        rota.setQuantidadeEncomendas(encomendas.size());
+        for (int i = 0; i < paradas.size(); i++) {
+            List<EncomendaDTO> objetos = paradas.get(i).encomendas;
+            EncomendaDTO ref = objetos.get(0);
+            ParadaDTO parada = new ParadaDTO();
+            parada.setOrdem(i + 1);
+            parada.setTipo("ENTREGA");
+            parada.setEndereco(ref.getEnderecoCompleto());
+            parada.setLogradouro(ref.getLogradouro());
+            parada.setNumero(ref.getNumero());
+            parada.setComplemento(ref.getComplemento());
+            parada.setBairro(ref.getBairro());
+            parada.setCidade(ref.getCidade());
+            parada.setUf(ref.getUf());
+            parada.setCep(ref.getCep());
+            parada.setEncomendas(objetos);
+            rota.getParadas().add(parada);
+        }
+        return rota;
+    }
+
+    /** Geocodifica e calcula somente a rota explicitamente escolhida pelo usuário. */
+    public RotaResponseDTO calcularRotaSelecionada(String identificador, List<EncomendaDTO> encomendas) {
+        if (mapClient == null || !mapClient.estaConfigurado()) {
+            throw new RomaneioException(getAvisoIndisponibilidade());
+        }
         if (encomendas == null || encomendas.isEmpty()) {
-            return Collections.emptyList();
+            throw new RomaneioException("A rota selecionada não contém encomendas válidas.");
         }
 
-        // 1. Agrupar encomendas em paradas únicas de entrega
-        List<ParadaDTO> paradasEntrega = agruparEncomendasEmParadas(encomendas);
-        int totalEncomendas = encomendas.size();
-
-        // 2. Criar a parada de origem fixa
-        ParadaDTO origem = criarParadaOrigem();
-
-        if (paradasEntrega.isEmpty()) {
-            RotaResponseDTO rotaVazia = criarRota(1, "A", "Rota A1 (Origem)", "Nenhuma parada de entrega", true, List.of(origem), totalEncomendas);
-            return List.of(rotaVazia);
+        geocodificacaoService.geocodificarEncomendas(encomendas);
+        CoordenadaDTO base = geocodificacaoService.geocodificarEndereco(BaseFixaConstants.ENDERECO_COMPLETO);
+        if (base == null || !base.isValid()) {
+            throw new RomaneioException("Não foi possível localizar a base fixa com precisão suficiente.");
         }
 
-        if (paradasEntrega.size() == 1) {
-            List<RotaResponseDTO> rotasUnicas = new ArrayList<>();
-            char[] letras = new char[]{'A', 'B', 'C', 'D', 'E'};
-            for (int i = 0; i < 5; i++) {
-                List<ParadaDTO> lista = List.of(clonarParada(origem), clonarParada(paradasEntrega.get(0)));
-                boolean principal = (i == 0);
-                String letra = String.valueOf(letras[i]);
-                int rank = i + 1;
-                String nome = principal ? "Rota " + letra + rank + " (Menor Distância)" : "Rota " + letra + rank;
-                rotasUnicas.add(criarRota(rank, letra, nome, "Rota direta com parada única", principal, lista, totalEncomendas));
-            }
-            return rotasUnicas;
+        List<ParadaAgrupada> paradas = consolidarParadas(encomendas);
+        if (paradas.size() > MAX_PONTOS_POR_ROTA) {
+            throw new RomaneioException("A rota excede o limite de " + MAX_PONTOS_POR_ROTA + " pontos por cálculo.");
+        }
+        if (paradas.stream().anyMatch(p -> p.latitude == null || p.longitude == null)) {
+            throw new RomaneioException("Há endereços sem coordenadas precisas nesta rota. Revise os endereços antes de calcular.");
+        }
+        List<CoordenadaDTO> pontos = paradas.stream()
+                .map(p -> new CoordenadaDTO(p.latitude, p.longitude)).toList();
+        try {
+            ExternalMapClient.Percurso percurso = mapClient.otimizarPercurso(base, pontos);
+            return montarResposta(identificador, base, paradas, percurso);
+        } catch (RuntimeException e) {
+            throw new RomaneioException("Não foi possível calcular a rota selecionada. " + mensagemCurta(e), e);
+        }
+    }
+
+    public ResultadoRoteirizacao calcularComAvisos(List<EncomendaDTO> encomendas) {
+        List<String> avisos = new ArrayList<>();
+        if (mapClient == null || !mapClient.estaConfigurado()) {
+            avisos.add(getAvisoIndisponibilidade());
+            return new ResultadoRoteirizacao(List.of(), avisos);
+        }
+        if (encomendas == null || encomendas.isEmpty()) return new ResultadoRoteirizacao(List.of(), List.of("Nenhuma encomenda válida para roteirizar."));
+
+        CoordenadaDTO base;
+        try {
+            base = geocodificacaoService.geocodificarEndereco(BaseFixaConstants.ENDERECO_COMPLETO);
+        } catch (RuntimeException e) {
+            avisos.add("Não foi possível localizar a base fixa; nenhuma rota foi classificada.");
+            return new ResultadoRoteirizacao(List.of(), avisos);
+        }
+        if (base == null || !base.isValid()) {
+            avisos.add("A base fixa não foi localizada com precisão suficiente pelo Google Maps; confira o endereço cadastrado.");
+            return new ResultadoRoteirizacao(List.of(), avisos);
         }
 
-        // 3. Gerar estratégias candidatas de rotas (Open TSP a partir da Origem)
-        List<List<ParadaDTO>> candidatos = new ArrayList<>();
-        int n = paradasEntrega.size();
-
-        // Estratégia 1: Vizinho Mais Próximo da Origem + Otimização 2-Opt
-        candidatos.add(otimizar2Opt(gerarVizinhoMaisProximo(origem, paradasEntrega, 0), origem));
-
-        // Estratégia 2: Varredura Polar Horária a partir da Origem + 2-Opt
-        candidatos.add(otimizar2Opt(gerarVarreduraAngular(origem, paradasEntrega, true), origem));
-
-        // Estratégia 3: Varredura Polar Anti-Horária a partir da Origem + 2-Opt
-        candidatos.add(otimizar2Opt(gerarVarreduraAngular(origem, paradasEntrega, false), origem));
-
-        // Estratégia 4: Agrupamento Regional (CEP / Bairro) + Proximidade + 2-Opt
-        candidatos.add(otimizar2Opt(gerarPorAgrupamentoRegional(origem, paradasEntrega), origem));
-
-        // Estratégia 5: Ordenação Linear Geográfica / Projeção + 2-Opt
-        candidatos.add(otimizar2Opt(gerarPorOrdenacaoLinear(origem, paradasEntrega), origem));
-
-        // Estratégias complementares
-        if (n <= 200) {
-            candidatos.add(otimizar2Opt(gerarVizinhoMaisProximo(origem, paradasEntrega, 1), origem));
-            candidatos.add(otimizar2Opt(gerarInsercaoMaisDistante(origem, paradasEntrega), origem));
-        }
-
-        // 4. Montar e avaliar as rotas calculadas
-        List<RotaResponseDTO> rotasAvaliadas = new ArrayList<>();
-        Set<String> assinaturasVistas = new HashSet<>();
-
-        for (List<ParadaDTO> sequenciaEntrega : candidatos) {
-            String assinatura = sequenciaEntrega.stream()
-                    .map(p -> p.getLatitude() + "," + p.getLongitude())
-                    .collect(Collectors.joining(";"));
-
-            if (assinaturasVistas.contains(assinatura)) {
+        Map<String, List<EncomendaDTO>> porIdentificador = encomendas.stream().collect(Collectors.groupingBy(
+                e -> normalizarIdentificador(e.getCorredor()), TreeMap::new, Collectors.toList()));
+        List<RotaResponseDTO> calculadas = new ArrayList<>();
+        for (Map.Entry<String, List<EncomendaDTO>> entry : porIdentificador.entrySet()) {
+            String id = entry.getKey();
+            if (id.equals("SEM-IDENTIFICADOR")) {
+                avisos.add("Há encomendas sem identificador de rota; elas não foram usadas na classificação.");
                 continue;
             }
-            assinaturasVistas.add(assinatura);
-
-            List<ParadaDTO> rotaCompleta = new ArrayList<>();
-            rotaCompleta.add(clonarParada(origem));
-            for (ParadaDTO p : sequenciaEntrega) {
-                rotaCompleta.add(clonarParada(p));
-            }
-
-            RotaResponseDTO rotaDTO = criarRota(0, "", "", "", false, rotaCompleta, totalEncomendas);
-            rotasAvaliadas.add(rotaDTO);
-        }
-
-        // Ordenar por menor distância total
-        rotasAvaliadas.sort(Comparator.comparingDouble(RotaResponseDTO::getDistanciaTotalKm));
-
-        // Garantir exatamente 5 rotas distintas ou preencher com variações caso haja poucas paradas
-        while (rotasAvaliadas.size() < 5) {
-            RotaResponseDTO copia = clonarRotaDTO(rotasAvaliadas.get(rotasAvaliadas.size() - 1));
-            rotasAvaliadas.add(copia);
-        }
-
-        List<RotaResponseDTO> cincoMelhores = rotasAvaliadas.subList(0, 5);
-
-        // 5. Configurar IDs, letras, nomes e flag principal
-        String[] letras = new String[]{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"};
-        for (int i = 0; i < cincoMelhores.size(); i++) {
-            RotaResponseDTO rota = cincoMelhores.get(i);
-            int rank = i + 1;
-            String letra = (i < letras.length) ? letras[i] : String.valueOf((char) ('A' + i));
-            rota.setId(rank);
-            rota.setLetra(letra);
-            if (rank == 1) {
-                rota.setPrincipal(true);
-                rota.setNome("Rota " + letra + rank + " (Menor Distância)");
-                rota.setDescricao("Melhor alternativa com a menor distância total calculada e sequência otimizada de paradas.");
-            } else {
-                rota.setPrincipal(false);
-                rota.setNome("Rota " + letra + rank);
-                rota.setDescricao("Alternativa viável de roteamento com menor sobreposição de trechos.");
+            try {
+                List<ParadaAgrupada> paradas = consolidarParadas(entry.getValue());
+                if (paradas.isEmpty()) {
+                    avisos.add("Rota " + id + ": não há pontos de entrega válidos.");
+                    continue;
+                }
+                if (paradas.size() > MAX_PONTOS_POR_ROTA) {
+                    avisos.add("Rota " + id + ": possui " + paradas.size() + " pontos, acima do limite operacional de " + MAX_PONTOS_POR_ROTA + "; não foi classificada.");
+                    continue;
+                }
+                if (paradas.stream().anyMatch(p -> p.latitude == null || p.longitude == null)) {
+                    avisos.add("Rota " + id + ": há endereços sem geocodificação precisa; valide-os antes do cálculo.");
+                    continue;
+                }
+                List<CoordenadaDTO> pontos = paradas.stream()
+                        .map(p -> new CoordenadaDTO(p.latitude, p.longitude)).toList();
+                ExternalMapClient.Percurso percurso = mapClient.otimizarPercurso(base, pontos);
+                calculadas.add(montarResposta(id, base, paradas, percurso));
+            } catch (RuntimeException e) {
+                avisos.add("Rota " + id + ": percurso indisponível. " + mensagemCurta(e));
             }
         }
-
-        return cincoMelhores;
+        calculadas.sort(Comparator.comparing(RotaResponseDTO::getDistanciaTotalKm));
+        List<RotaResponseDTO> melhores = calculadas.stream().limit(5).toList();
+        for (int i = 0; i < melhores.size(); i++) { melhores.get(i).setId(i + 1); melhores.get(i).setPrincipal(i == 0); }
+        if (melhores.isEmpty() && avisos.isEmpty()) avisos.add("Nenhuma rota pôde ser calculada com os dados disponíveis.");
+        return new ResultadoRoteirizacao(melhores, avisos);
     }
 
-    private List<ParadaDTO> agruparEncomendasEmParadas(List<EncomendaDTO> encomendas) {
-        Map<String, ParadaDTO> mapaParadas = new LinkedHashMap<>();
+    public String getAvisoIndisponibilidade() {
+        return "Para calcular a distância e o tempo da rota selecionada, configure ROMANEIO_GOOGLE_MAPS_API_KEY e habilite Geocoding API e Routes API.";
+    }
 
-        for (EncomendaDTO enc : encomendas) {
-            String chave = enc.getChaveLocalizacao();
-            ParadaDTO parada = mapaParadas.computeIfAbsent(chave, k -> {
-                ParadaDTO p = new ParadaDTO();
-                p.setTipo("ENTREGA");
-                p.setEndereco(enc.getEnderecoCompleto());
-                p.setLogradouro(enc.getLogradouro());
-                p.setNumero(enc.getNumero());
-                p.setBairro(enc.getBairro());
-                p.setCidade(enc.getCidade());
-                p.setUf(enc.getUf());
-                p.setCep(enc.getCep());
-                p.setLatitude(enc.getLatitude());
-                p.setLongitude(enc.getLongitude());
-                return p;
-            });
-            parada.adicionarEncomenda(enc);
+    private List<ParadaAgrupada> consolidarParadas(List<EncomendaDTO> encomendas) {
+        List<ParadaAgrupada> paradas = new ArrayList<>();
+        for (EncomendaDTO encomenda : encomendas) {
+            ParadaAgrupada existente = paradas.stream().filter(p -> mesmoEndereco(p.encomendas.get(0), encomenda)).findFirst().orElse(null);
+            if (existente == null) paradas.add(new ParadaAgrupada(encomenda));
+            else existente.encomendas.add(encomenda);
         }
-
-        return new ArrayList<>(mapaParadas.values());
+        return paradas;
     }
 
-    private ParadaDTO criarParadaOrigem() {
-        ParadaDTO origem = new ParadaDTO(1, "ORIGEM", BaseFixaConstants.ENDERECO_COMPLETO,
-                BaseFixaConstants.LATITUDE, BaseFixaConstants.LONGITUDE);
+    private boolean mesmoEndereco(EncomendaDTO a, EncomendaDTO b) {
+        String numeroA = normalizar(a.getNumero()), numeroB = normalizar(b.getNumero());
+        if (numeroA.isBlank() || !numeroA.equals(numeroB)) return false;
+        String cepA = digitos(a.getCep()), cepB = digitos(b.getCep());
+        if (cepA.isBlank() || !cepA.equals(cepB)) return false;
+        return nomesDeRuaParecidos(chaveRua(a.getLogradouro()), chaveRua(b.getLogradouro()));
+    }
+
+    private String chaveRua(String valor) {
+        String rua = removerTipoVia(normalizar(valor));
+        return rua.replaceAll("\\bjose\\s+g\\s+", "jose goncalves ");
+    }
+
+    private boolean nomesDeRuaParecidos(String a, String b) {
+        if (a.isBlank() || b.isBlank()) return false;
+        String[] ta = a.split(" "), tb = b.split(" ");
+        if (Math.abs(ta.length - tb.length) > 1) return false;
+        int i = 0, j = 0, divergencias = 0;
+        while (i < ta.length && j < tb.length) {
+            if (ta[i].equals(tb[j]) || ta[i].startsWith(tb[j]) || tb[j].startsWith(ta[i])) { i++; j++; continue; }
+            if (++divergencias > 1) return false;
+            if (ta.length > tb.length) i++; else if (tb.length > ta.length) j++; else { i++; j++; }
+        }
+        divergencias += (ta.length - i) + (tb.length - j);
+        return divergencias <= 1;
+    }
+    private RotaResponseDTO montarResposta(String id, CoordenadaDTO base, List<ParadaAgrupada> paradas,
+                                            ExternalMapClient.Percurso percurso) {
+        RotaResponseDTO rota = new RotaResponseDTO();
+        rota.setId(1);
+        rota.setIdentificador(id);
+        rota.setLetra(id.split("-")[0]);
+        rota.setNome("Rota " + id);
+        rota.setDescricao("Percurso aberto por vias, com distância estimada e sem retorno à base.");
+        ParadaDTO origem = new ParadaDTO(0, "ORIGEM", BaseFixaConstants.ENDERECO_COMPLETO, base.getLatitude(), base.getLongitude());
+        origem.setDistanciaDoPontoAnteriorKm(0.0);
+        origem.setDistanciaAcumuladaKm(0.0);
         origem.setLogradouro(BaseFixaConstants.LOGRADOURO);
         origem.setNumero(BaseFixaConstants.NUMERO);
         origem.setBairro(BaseFixaConstants.BAIRRO);
         origem.setCidade(BaseFixaConstants.CIDADE);
         origem.setUf(BaseFixaConstants.UF);
         origem.setCep(BaseFixaConstants.CEP);
-        return origem;
-    }
+        rota.getParadas().add(origem);
 
-    // Heurística do Vizinho Mais Próximo
-    private List<ParadaDTO> gerarVizinhoMaisProximo(ParadaDTO origem, List<ParadaDTO> paradas, int offsetInicio) {
-        if (paradas.isEmpty()) return new ArrayList<>();
-
-        if (paradas.size() > 300) {
-            List<ParadaDTO> ordenada = new ArrayList<>(paradas);
-            ordenada.sort(Comparator.comparingDouble((ParadaDTO p) -> calcularDistancia(origem, p))
-                    .thenComparingDouble(ParadaDTO::getLongitude));
-            return ordenada;
+        double totalMetros = 0;
+        double totalSegundos = 0;
+        List<Integer> ordem = percurso.ordem();
+        for (int pos = 0; pos < ordem.size(); pos++) {
+            int indice = ordem.get(pos);
+            ParadaAgrupada agrupada = paradas.get(indice);
+            double metros = percurso.distanciasPorTrecho().get(pos);
+            double segundos = percurso.duracoesPorTrecho().get(pos);
+            totalMetros += metros;
+            totalSegundos += segundos;
+            EncomendaDTO ref = agrupada.encomendas.get(0);
+            ParadaDTO parada = new ParadaDTO(pos + 1, "ENTREGA", ref.getEnderecoCompleto(), agrupada.latitude, agrupada.longitude);
+            parada.setLogradouro(ref.getLogradouro()); parada.setNumero(ref.getNumero()); parada.setComplemento(ref.getComplemento()); parada.setBairro(ref.getBairro());
+            parada.setCidade(ref.getCidade()); parada.setUf(ref.getUf()); parada.setCep(ref.getCep());
+            parada.setDistanciaDoPontoAnteriorKm(metros / 1000.0);
+            parada.setDistanciaAcumuladaKm(totalMetros / 1000.0);
+            parada.setEncomendas(agrupada.encomendas);
+            rota.getParadas().add(parada);
         }
-
-        List<ParadaDTO> naoVisitadas = new ArrayList<>(paradas);
-        List<ParadaDTO> resultado = new ArrayList<>();
-
-        // Ordena por distância da origem para escolher ponto de partida
-        naoVisitadas.sort(Comparator.comparingDouble(p -> calcularDistancia(origem, p)));
-
-        int indiceInicial = Math.min(offsetInicio, naoVisitadas.size() - 1);
-        ParadaDTO atual = naoVisitadas.remove(indiceInicial);
-        resultado.add(atual);
-
-        while (!naoVisitadas.isEmpty()) {
-            final ParadaDTO pontoAtual = atual;
-            ParadaDTO maisProximo = null;
-            double menorDist = Double.MAX_VALUE;
-            int indiceMaisProximo = 0;
-
-            for (int i = 0; i < naoVisitadas.size(); i++) {
-                ParadaDTO p = naoVisitadas.get(i);
-                double d = calcularDistancia(pontoAtual, p);
-                if (d < menorDist) {
-                    menorDist = d;
-                    maisProximo = p;
-                    indiceMaisProximo = i;
-                }
-            }
-
-            atual = naoVisitadas.remove(indiceMaisProximo);
-            resultado.add(atual);
-        }
-
-        return resultado;
-    }
-
-    // Heurística de Varredura Angular (Sweep Polar)
-    private List<ParadaDTO> gerarVarreduraAngular(ParadaDTO origem, List<ParadaDTO> paradas, boolean horario) {
-        List<ParadaDTO> ordenadas = new ArrayList<>(paradas);
-        ordenadas.sort((p1, p2) -> {
-            double angulo1 = Math.atan2(p1.getLatitude() - origem.getLatitude(), p1.getLongitude() - origem.getLongitude());
-            double angulo2 = Math.atan2(p2.getLatitude() - origem.getLatitude(), p2.getLongitude() - origem.getLongitude());
-            int cmp = Double.compare(angulo1, angulo2);
-            return horario ? cmp : -cmp;
-        });
-        return ordenadas;
-    }
-
-    // Heurística de Agrupamento Regional (CEP / Bairro)
-    private List<ParadaDTO> gerarPorAgrupamentoRegional(ParadaDTO origem, List<ParadaDTO> paradas) {
-        Map<String, List<ParadaDTO>> clusters = new LinkedHashMap<>();
-        for (ParadaDTO p : paradas) {
-            String cepDigitos = p.getCep() != null ? p.getCep().replaceAll("[^0-9]", "") : "";
-            String regiao = (cepDigitos.length() >= 5) ?
-                    cepDigitos.substring(0, 5) : (p.getBairro() != null ? p.getBairro().trim().toLowerCase() : "Geral");
-            clusters.computeIfAbsent(regiao, k -> new ArrayList<>()).add(p);
-        }
-
-        // Ordena cada cluster pela distância média até a origem
-        List<Map.Entry<String, List<ParadaDTO>>> listaClusters = new ArrayList<>(clusters.entrySet());
-        listaClusters.sort(Comparator.comparingDouble(entry -> {
-            List<ParadaDTO> lista = entry.getValue();
-            return lista.stream().mapToDouble(p -> calcularDistancia(origem, p)).average().orElse(0.0);
-        }));
-
-        List<ParadaDTO> resultado = new ArrayList<>();
-        for (Map.Entry<String, List<ParadaDTO>> entry : listaClusters) {
-            List<ParadaDTO> subLista = entry.getValue();
-            subLista.sort(Comparator.comparingDouble(p -> calcularDistancia(origem, p)));
-            resultado.addAll(subLista);
-        }
-        return resultado;
-    }
-
-    // Heurística de Inserção Mais Distante
-    private List<ParadaDTO> gerarInsercaoMaisDistante(ParadaDTO origem, List<ParadaDTO> paradas) {
-        List<ParadaDTO> naoVisitadas = new ArrayList<>(paradas);
-        List<ParadaDTO> rota = new ArrayList<>();
-
-        if (naoVisitadas.isEmpty()) return rota;
-
-        // Escolhe o ponto mais distante da origem
-        naoVisitadas.sort((p1, p2) -> Double.compare(calcularDistancia(origem, p2), calcularDistancia(origem, p1)));
-        rota.add(naoVisitadas.remove(0));
-
-        while (!naoVisitadas.isEmpty()) {
-            // Acha o ponto mais distante de todos os pontos na rota
-            ParadaDTO maisDistante = null;
-            double maxDist = -1.0;
-            int idxMaisDistante = 0;
-
-            for (int i = 0; i < naoVisitadas.size(); i++) {
-                ParadaDTO cand = naoVisitadas.get(i);
-                double minDistNaRota = rota.stream().mapToDouble(p -> calcularDistancia(p, cand)).min().orElse(0.0);
-                if (minDistNaRota > maxDist) {
-                    maxDist = minDistNaRota;
-                    maisDistante = cand;
-                    idxMaisDistante = i;
-                }
-            }
-
-            naoVisitadas.remove(idxMaisDistante);
-
-            // Acha a melhor posição de inserção na rota aberta
-            int melhorPos = 0;
-            double menorCusto = Double.MAX_VALUE;
-
-            for (int pos = 0; pos <= rota.size(); pos++) {
-                double custo = calcularCustoInsercao(origem, rota, maisDistante, pos);
-                if (custo < menorCusto) {
-                    menorCusto = custo;
-                    melhorPos = pos;
-                }
-            }
-
-            rota.add(melhorPos, maisDistante);
-        }
-
+        double km = totalMetros / 1000.0;
+        int minutos = (int) Math.round(totalSegundos / 60.0 + ordem.size() * 3.0);
+        rota.setDistanciaTotalKm(km); rota.setDistanciaTotalFormatada(GeoUtils.formatarDistancia(km));
+        rota.setTempoEstimadoMinutos(minutos); rota.setTempoEstimadoFormatado(GeoUtils.formatarTempo(minutos));
+        rota.setQuantidadeParadas(ordem.size() + 1);
+        rota.setQuantidadeEncomendas(paradas.stream().mapToInt(p -> p.encomendas.size()).sum());
         return rota;
     }
 
-    private double calcularCustoInsercao(ParadaDTO origem, List<ParadaDTO> rota, ParadaDTO novo, int pos) {
-        List<ParadaDTO> temp = new ArrayList<>(rota);
-        temp.add(pos, novo);
-        return calcularDistanciaTotalAberta(origem, temp);
+    private String normalizarIdentificador(String valor) {
+        if (valor == null || valor.isBlank()) return "SEM-IDENTIFICADOR";
+        String id = valor.trim().toUpperCase(Locale.ROOT).replaceAll("\\s+", "");
+        if (id.startsWith("ROTA")) id = id.substring(4);
+        return id.isBlank() ? "SEM-IDENTIFICADOR" : id;
     }
 
-    // Ordenação linear por Projeção Geográfica
-    private List<ParadaDTO> gerarPorOrdenacaoLinear(ParadaDTO origem, List<ParadaDTO> paradas) {
-        List<ParadaDTO> lista = new ArrayList<>(paradas);
-        lista.sort(Comparator.comparingDouble(ParadaDTO::getLongitude)
-                .thenComparingDouble(ParadaDTO::getLatitude));
-        return lista;
+    private String removerTipoVia(String rua) { return rua.replaceFirst("^(rua|r|avenida|av|travessa|tv|estrada|estr|rodovia|rod)\\s+", ""); }
+    private String normalizar(String texto) {
+        if (texto == null) return "";
+        return Normalizer.normalize(texto.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "").replaceAll("[^a-z0-9\\s]", " ").replaceAll("\\s+", " ").trim();
+    }
+    private String digitos(String valor) { return valor == null ? "" : valor.replaceAll("[^0-9]", ""); }
+    private String mensagemCurta(RuntimeException e) {
+        String mensagem = e.getMessage();
+        return mensagem == null || mensagem.isBlank() ? "falha ao validar endereços ou consultar o provedor." : mensagem;
     }
 
-    // Otimização 2-Opt para Open TSP (caminho aberto com origem fixa)
-    private List<ParadaDTO> otimizar2Opt(List<ParadaDTO> paradas, ParadaDTO origem) {
-        if (paradas == null || paradas.size() <= 2) {
-            return paradas;
-        }
-
-        List<ParadaDTO> rota = new ArrayList<>(paradas);
-        int n = rota.size();
-        boolean melhorou = true;
-        int maxIteracoes = n > 500 ? 5 : (n > 100 ? 20 : 100);
-        int maxJanela = n > 500 ? 30 : n;
-        int iter = 0;
-
-        while (melhorou && iter < maxIteracoes) {
-            melhorou = false;
-            iter++;
-
-            for (int i = 0; i < n - 1; i++) {
-                int limitJ = Math.min(n, i + maxJanela);
-                for (int j = i + 1; j < limitJ; j++) {
-                    double delta = calcularDelta2Opt(origem, rota, i, j);
-                    if (delta < -1e-6) {
-                        inverterSublista(rota, i, j);
-                        melhorou = true;
-                    }
-                }
-            }
-        }
-
-        return rota;
-    }
-
-    private double calcularDelta2Opt(ParadaDTO origem, List<ParadaDTO> rota, int i, int j) {
-        int n = rota.size();
-        ParadaDTO prev = (i == 0) ? origem : rota.get(i - 1);
-        ParadaDTO pi = rota.get(i);
-        ParadaDTO pj = rota.get(j);
-        ParadaDTO next = (j < n - 1) ? rota.get(j + 1) : null;
-
-        double distAtual = calcularDistancia(prev, pi);
-        if (next != null) {
-            distAtual += calcularDistancia(pj, next);
-        }
-
-        double distNova = calcularDistancia(prev, pj);
-        if (next != null) {
-            distNova += calcularDistancia(pi, next);
-        }
-
-        return distNova - distAtual;
-    }
-
-    private void inverterSublista(List<ParadaDTO> lista, int i, int j) {
-        while (i < j) {
-            ParadaDTO temp = lista.get(i);
-            lista.set(i, lista.get(j));
-            lista.set(j, temp);
-            i++;
-            j--;
+    private static final class ParadaAgrupada {
+        private final List<EncomendaDTO> encomendas = new ArrayList<>();
+        private final Double latitude;
+        private final Double longitude;
+        private ParadaAgrupada(EncomendaDTO encomenda) {
+            encomendas.add(encomenda); latitude = encomenda.getLatitude(); longitude = encomenda.getLongitude();
         }
     }
 
-    private double calcularDistanciaTotalAberta(ParadaDTO origem, List<ParadaDTO> paradas) {
-        if (paradas.isEmpty()) return 0.0;
-        double total = calcularDistancia(origem, paradas.get(0));
-        for (int i = 0; i < paradas.size() - 1; i++) {
-            total += calcularDistancia(paradas.get(i), paradas.get(i + 1));
-        }
-        return total;
-    }
-
-    private double calcularDistancia(ParadaDTO p1, ParadaDTO p2) {
-        if (p1 == null || p2 == null) return 0.0;
-        return GeoUtils.calcularDistanciaKm(
-                p1.getLatitude(), p1.getLongitude(),
-                p2.getLatitude(), p2.getLongitude()
-        );
-    }
-
-    private RotaResponseDTO criarRota(int id, String letra, String nome, String descricao, boolean principal,
-                                      List<ParadaDTO> paradas, int totalEncomendas) {
-        RotaResponseDTO dto = new RotaResponseDTO(id, letra, nome, descricao, principal);
-
-        double distAcumulada = 0.0;
-        for (int i = 0; i < paradas.size(); i++) {
-            ParadaDTO p = paradas.get(i);
-            p.setOrdem(i + 1);
-
-            if (i == 0) {
-                p.setDistanciaDoPontoAnteriorKm(0.0);
-                p.setDistanciaAcumuladaKm(0.0);
-            } else {
-                ParadaDTO anterior = paradas.get(i - 1);
-                double d = calcularDistancia(anterior, p);
-                distAcumulada += d;
-                p.setDistanciaDoPontoAnteriorKm(Math.round(d * 100.0) / 100.0);
-                p.setDistanciaAcumuladaKm(Math.round(distAcumulada * 100.0) / 100.0);
-            }
-        }
-
-        double totalKm = Math.round(distAcumulada * 100.0) / 100.0;
-        dto.setDistanciaTotalKm(totalKm);
-        dto.setDistanciaTotalFormatada(GeoUtils.formatarDistancia(totalKm));
-
-        int totalParadas = paradas.size();
-        int tempoMin = GeoUtils.estimarTempoMinutos(totalKm, totalParadas);
-        dto.setTempoEstimadoMinutos(tempoMin);
-        dto.setTempoEstimadoFormatado(GeoUtils.formatarTempo(tempoMin));
-        dto.setQuantidadeParadas(totalParadas);
-        dto.setQuantidadeEncomendas(totalEncomendas);
-        dto.setParadas(paradas);
-
-        return dto;
-    }
-
-    private ParadaDTO clonarParada(ParadaDTO original) {
-        ParadaDTO p = new ParadaDTO();
-        p.setOrdem(original.getOrdem());
-        p.setTipo(original.getTipo());
-        p.setEndereco(original.getEndereco());
-        p.setLogradouro(original.getLogradouro());
-        p.setNumero(original.getNumero());
-        p.setBairro(original.getBairro());
-        p.setCidade(original.getCidade());
-        p.setUf(original.getUf());
-        p.setCep(original.getCep());
-        p.setLatitude(original.getLatitude());
-        p.setLongitude(original.getLongitude());
-        p.setDistanciaDoPontoAnteriorKm(original.getDistanciaDoPontoAnteriorKm());
-        p.setDistanciaAcumuladaKm(original.getDistanciaAcumuladaKm());
-        p.setEncomendas(new ArrayList<>(original.getEncomendas()));
-        p.setQuantidadeEncomendas(original.getQuantidadeEncomendas());
-        return p;
-    }
-
-    private RotaResponseDTO clonarRotaDTO(RotaResponseDTO original) {
-        List<ParadaDTO> paradasClonadas = original.getParadas().stream()
-                .map(this::clonarParada)
-                .collect(Collectors.toList());
-
-        RotaResponseDTO rota = new RotaResponseDTO();
-        rota.setId(original.getId());
-        rota.setLetra(original.getLetra());
-        rota.setNome(original.getNome());
-        rota.setDescricao(original.getDescricao());
-        rota.setPrincipal(original.isPrincipal());
-        rota.setDistanciaTotalKm(original.getDistanciaTotalKm());
-        rota.setDistanciaTotalFormatada(original.getDistanciaTotalFormatada());
-        rota.setTempoEstimadoMinutos(original.getTempoEstimadoMinutos());
-        rota.setTempoEstimadoFormatado(original.getTempoEstimadoFormatado());
-        rota.setQuantidadeParadas(original.getQuantidadeParadas());
-        rota.setQuantidadeEncomendas(original.getQuantidadeEncomendas());
-        rota.setParadas(paradasClonadas);
-        return rota;
-    }
+    public record ResultadoRoteirizacao(List<RotaResponseDTO> rotas, List<String> avisos) {}
 }

@@ -9,6 +9,7 @@ public class ImportacaoResponseDTO {
     private int totalLinhasArquivo;
     private int totalEncomendasValidas;
     private int totalParadasUnicas;
+    private String idImportacao;
     private List<String> avisos = new ArrayList<>();
     private List<RotaResponseDTO> rotas = new ArrayList<>();
 
@@ -58,6 +59,10 @@ public class ImportacaoResponseDTO {
     public void setTotalParadasUnicas(int totalParadasUnicas) {
         this.totalParadasUnicas = totalParadasUnicas;
     }
+
+    public String getIdImportacao() { return idImportacao; }
+
+    public void setIdImportacao(String idImportacao) { this.idImportacao = idImportacao; }
 
     public List<String> getAvisos() {
         return avisos;

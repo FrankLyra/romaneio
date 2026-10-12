@@ -39,30 +39,22 @@ public class ValidacaoService {
 
         ResultadoValidacao resultado = new ResultadoValidacao();
         Set<String> codigosProcessados = new HashSet<>();
+        int ocorrenciasDuplicadas = 0;
         int linhaNum = 1;
 
         for (EncomendaDTO enc : listaBruta) {
             linhaNum++;
-            // Validação de código obrigatório
-            if (enc.getCodigo() == null || enc.getCodigo().isBlank()) {
-                resultado.totalInvalidos++;
-                resultado.avisos.add("Linha " + linhaNum + ": Encomenda ignorada por falta de identificador/código.");
-                continue;
-            }
-
-            // Identificação de duplicidade de código
-            String codNormalizado = enc.getCodigo().trim();
-            if (codigosProcessados.contains(codNormalizado)) {
+            // O romaneio pode não conter um identificador único. Sequence é uma ordem da planilha,
+            // não um código de encomenda; linhas sem código continuam sendo entregas válidas.
+            String codNormalizado = enc.getCodigo() == null ? "" : enc.getCodigo().trim();
+            if (!codNormalizado.isBlank() && !codigosProcessados.add(codNormalizado)) {
                 resultado.totalDuplicados++;
-                resultado.avisos.add("Linha " + linhaNum + ": Encomenda com código duplicado '" + codNormalizado + "' encontrada e mantida no mesmo ponto.");
-            } else {
-                codigosProcessados.add(codNormalizado);
+                ocorrenciasDuplicadas++;
             }
-
             // Validação de Logradouro obrigatório
             if (enc.getLogradouro() == null || enc.getLogradouro().isBlank()) {
                 resultado.totalInvalidos++;
-                resultado.avisos.add("Linha " + linhaNum + " (Código " + codNormalizado + "): Encomenda ignorada por falta de logradouro obrigatório.");
+                resultado.avisos.add("Linha " + linhaNum + ": Encomenda ignorada por falta de logradouro obrigatório.");
                 continue;
             }
 
@@ -90,6 +82,10 @@ public class ValidacaoService {
             }
 
             resultado.encomendasValidas.add(enc);
+        }
+
+        if (ocorrenciasDuplicadas > 0) {
+            resultado.avisos.add(ocorrenciasDuplicadas + " linhas repetem código de encomenda; as linhas foram mantidas no processamento.");
         }
 
         if (resultado.encomendasValidas.isEmpty()) {

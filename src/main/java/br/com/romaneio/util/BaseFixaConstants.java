@@ -12,8 +12,4 @@ public final class BaseFixaConstants {
     public static final String CIDADE = "Maricá";
     public static final String UF = "RJ";
     public static final String CEP = "24942-395";
-
-    // Coordenadas aproximadas da base de Itaipuaçu (R. Dois, 349 - Maricá - RJ)
-    public static final double LATITUDE = -22.95156;
-    public static final double LONGITUDE = -42.98361;
 }
